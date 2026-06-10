@@ -14,10 +14,13 @@ data/*.db-journal
 .env
 .env.local
 
-# Downloadable exports — derived from Postgres by scripts/export_sqlite.mjs on
-# every prebuild and shipped via dist/. Not committed (they duplicate
-# public/movies_web.db and would bloat the repo).
+# Build artifacts derived from Postgres by scripts/export_sqlite.mjs on every
+# prebuild and shipped via dist/. Not committed — Postgres is the source of
+# truth and these regenerate on every build (committing them is pure churn).
+# (movies_web.db is no longer read at runtime since /query moved to Supabase.)
 public/downloads/
+public/movies_web.db
+export/films_full.csv
 
 # Raw source archive (167 MB of original .shtml pages, a–z). This is the
 # provenance for movies_web.db but is NOT used by the site or the build, so it
