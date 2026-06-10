@@ -14,6 +14,11 @@ data/*.db-journal
 .env
 .env.local
 
+# Downloadable exports — derived from Postgres by scripts/export_sqlite.mjs on
+# every prebuild and shipped via dist/. Not committed (they duplicate
+# public/movies_web.db and would bloat the repo).
+public/downloads/
+
 # Raw source archive (167 MB of original .shtml pages, a–z). This is the
 # provenance for movies_web.db but is NOT used by the site or the build, so it
 # is kept out of the deploy repo to keep clones and CI checkouts fast.

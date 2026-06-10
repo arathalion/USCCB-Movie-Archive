@@ -9,7 +9,8 @@
   "scripts": {
     "predev": "node scripts/copy-sqljs.mjs",
     "dev": "astro dev",
-    "prebuild": "node scripts/copy-sqljs.mjs",
+    "prebuild": "node scripts/copy-sqljs.mjs && node scripts/export_sqlite.mjs",
+    "export:db": "node scripts/export_sqlite.mjs",
     "build": "astro build",
     "preview": "astro preview"
   },
