@@ -1,0 +1,151 @@
+---
+import Base from '../layouts/Base.astro';
+import { USCCB_ORDER, USCCB_LEGEND } from '../lib/ratings.js';
+---
+
+<Base title="Browse" description="Browse 13,694 USCCB / Catholic News Service movie reviews (1905–2011)." active="browse">
+  <h1>Browse the archive</h1>
+  <p class="lede">
+    13,694 film reviews from the USCCB Office for Film &amp; Broadcasting / Catholic
+    News Service, 1905–2011. Search by title, or filter by rating and decade.
+  </p>
+
+  <div class="controls">
+    <input
+      type="search"
+      id="q"
+      placeholder="Search titles (e.g. casino, war of the roses)…"
+      autocomplete="off"
+      spellcheck="false"
+    />
+    <div class="filters">
+      <select id="usccb" aria-label="USCCB rating">
+        <option value="">All USCCB ratings</option>
+        {USCCB_ORDER.map((r) => <option value={r}>{r} — {USCCB_LEGEND[r]}</option>)}
+      </select>
+      <select id="mpaa" aria-label="MPAA rating">
+        <option value="">All MPAA ratings</option>
+      </select>
+      <select id="decade" aria-label="Decade">
+        <option value="">All decades</option>
+      </select>
+    </div>
+  </div>
+
+  <p class="count" id="count">Loading index…</p>
+  <ul class="films" id="films"></ul>
+  <div class="center">
+    <button id="more" class="secondary" hidden>Show more</button>
+  </div>
+
+  <script>
+    const base = import.meta.env.BASE_URL;
+    const PAGE = 300;
+
+    const ARTICLES = ['the','a','an','la','le','les','il','lo','el','las','los','der','die','das',"l'",'un','une'];
+    // "War of the Roses, The" -> "the war of the roses"
+    function frontForm(title) {
+      const m = title.match(/^(.*),\s*([A-Za-z']+)\.?$/);
+      if (m && ARTICLES.includes(m[2].toLowerCase())) {
+        const art = m[2];
+        const sep = art.endsWith("'") ? '' : ' ';
+        return (art + sep + m[1]).trim();
+      }
+      return title;
+    }
+    const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const esc = (s) =>
+      String(s ?? '').replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
+      );
+
+    const qEl = document.getElementById('q');
+    const usccbEl = document.getElementById('usccb');
+    const mpaaEl = document.getElementById('mpaa');
+    const decadeEl = document.getElementById('decade');
+    const countEl = document.getElementById('count');
+    const listEl = document.getElementById('films');
+    const moreEl = document.getElementById('more');
+
+    let films = [];        // [id, slug, title, year, usccb, mpaa]
+    let searchKeys = [];    // precomputed normalized "title + frontForm"
+    let filtered = [];
+    let shown = 0;
+
+    function render(reset) {
+      if (reset) { listEl.innerHTML = ''; shown = 0; }
+      const next = filtered.slice(shown, shown + PAGE);
+      const html = next
+        .map((f) => {
+          const [, slug, title, year, usccb, mpaa] = f;
+          const chips =
+            (usccb ? `<span class="chip usccb" title="${esc(USCCB_TT[usccb] || '')}">${esc(usccb)}</span>` : '') +
+            (mpaa ? `<span class="chip">${esc(mpaa)}</span>` : '');
+          return `<li><span class="title"><a href="${base}film/${esc(slug)}">${esc(title)}</a></span>` +
+            `<span class="chip-row">${chips}</span>` +
+            `<span class="year">${year ?? '—'}</span></li>`;
+        })
+        .join('');
+      listEl.insertAdjacentHTML('beforeend', html);
+      shown += next.length;
+      moreEl.hidden = shown >= filtered.length;
+      countEl.textContent =
+        `${filtered.length.toLocaleString()} film${filtered.length === 1 ? '' : 's'}` +
+        (filtered.length > shown ? ` — showing ${shown.toLocaleString()}` : '');
+    }
+
+    const USCCB_TT = {
+      'A-I': 'General patronage', 'A-II': 'Adults and adolescents', 'A-III': 'Adults',
+      'A-IV': 'Adults, with reservations', 'L': 'Limited adult audience', 'O': 'Morally offensive',
+    };
+
+    function apply() {
+      const q = norm(qEl.value);
+      const u = usccbEl.value, m = mpaaEl.value, d = decadeEl.value;
+      const dmin = d ? +d : null;
+      filtered = films.filter((f, i) => {
+        if (u && f[4] !== u) return false;
+        if (m && f[5] !== m) return false;
+        if (d) { const y = f[3]; if (y == null || y < dmin || y > dmin + 9) return false; }
+        if (q && !searchKeys[i].includes(q)) return false;
+        return true;
+      });
+      render(true);
+    }
+
+    fetch(base + 'films-index.json')
+      .then((r) => r.json())
+      .then((data) => {
+        films = data;
+        searchKeys = films.map((f) => norm(f[2]) + ' ' + norm(frontForm(f[2])));
+        // Populate MPAA + decade options from the data.
+        const mpaaSet = new Set(), decadeSet = new Set();
+        for (const f of films) {
+          if (f[5]) mpaaSet.add(f[5]);
+          if (f[3] != null) decadeSet.add(Math.floor(f[3] / 10) * 10);
+        }
+        const mpaaOrder = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
+        [...mpaaSet]
+          .sort((a, b) => {
+            const ia = mpaaOrder.indexOf(a), ib = mpaaOrder.indexOf(b);
+            return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+          })
+          .forEach((v) => mpaaEl.add(new Option(v, v)));
+        [...decadeSet]
+          .sort((a, b) => a - b)
+          .forEach((v) => decadeEl.add(new Option(`${v}s`, v)));
+        apply();
+      })
+      .catch((e) => {
+        countEl.textContent = 'Failed to load the film index.';
+        console.error(e);
+      });
+
+    let t;
+    qEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(apply, 120); });
+    usccbEl.addEventListener('change', apply);
+    mpaaEl.addEventListener('change', apply);
+    decadeEl.addEventListener('change', apply);
+    moreEl.addEventListener('click', () => render(false));
+  </script>
+</Base>

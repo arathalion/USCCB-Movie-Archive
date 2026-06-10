@@ -1,0 +1,20 @@
+# Build output & deps
+node_modules/
+dist/
+.astro/
+*.log
+
+# OS / editor cruft
+.DS_Store
+
+# Transient SQLite journal
+data/*.db-journal
+
+# Raw source archive (167 MB of original .shtml pages, a–z). This is the
+# provenance for movies_web.db but is NOT used by the site or the build, so it
+# is kept out of the deploy repo to keep clones and CI checkouts fast.
+# Remove this line if you want the raw archive tracked in git too.
+source-archive/
+
+# NOTE: public/movies_web.db, export/films.json, and package-lock.json are
+# intentionally NOT ignored — they are required to build and deploy the site.

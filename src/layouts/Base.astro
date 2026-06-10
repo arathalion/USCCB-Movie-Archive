@@ -1,0 +1,45 @@
+---
+import '../styles/global.css';
+
+const { title, description, active } = Astro.props;
+const base = import.meta.env.BASE_URL; // always ends with "/"
+const pageTitle = title ? `${title} · USCCB Movie Reviews Archive` : 'USCCB Movie Reviews Archive';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle}</title>
+    {description && <meta name="description" content={description} />}
+    <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <div class="site-title">
+          <a href={base}>USCCB Movie Reviews Archive</a>
+          <span class="sub">Catholic News Service film reviews · 1905–2011</span>
+        </div>
+        <nav class="nav">
+          <a href={base} class={active === 'browse' ? 'active' : ''}>Browse</a>
+          <a href={`${base}query`} class={active === 'query' ? 'active' : ''}>Query</a>
+          <a href={`${base}about`} class={active === 'about' ? 'active' : ''}>About</a>
+        </nav>
+      </div>
+    </header>
+    <main>
+      <div class="wrap">
+        <slot />
+      </div>
+    </main>
+    <footer class="site-footer">
+      <div class="wrap">
+        A historical archive of 13,694 reviews from the USCCB Office for Film &amp;
+        Broadcasting / Catholic News Service (coverage 1905–2011). Not affiliated with
+        the USCCB. Review text © its original publishers.
+      </div>
+    </footer>
+  </body>
+</html>

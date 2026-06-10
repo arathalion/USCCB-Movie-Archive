@@ -1,0 +1,46 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress run.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build with Astro
+        uses: withastro/action@v3
+        with:
+          # Build-time DB reads use Node's built-in node:sqlite (no native module).
+          # Pinned to 26 to match the version this was verified against, where
+          # node:sqlite is available without an experimental flag.
+          node-version: 26
+        env:
+          # Project site lives at https://<user>.github.io/<repo>/ — derive the
+          # base path from the repo name so asset/range-request URLs are correct.
+          # For a user/root site or custom domain, set this to "/".
+          BASE_PATH: /${{ github.event.repository.name }}/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

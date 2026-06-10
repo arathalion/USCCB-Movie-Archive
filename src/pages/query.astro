@@ -1,0 +1,176 @@
+---
+import Base from '../layouts/Base.astro';
+
+const EXAMPLES = [
+  "SELECT cns_rating, COUNT(*) AS n FROM reviews WHERE is_redirect=0 GROUP BY cns_rating ORDER BY n DESC;",
+  "SELECT title, year FROM reviews WHERE cns_rating='O' AND year BETWEEN 2000 AND 2010 ORDER BY year;",
+  "SELECT mpaa_rating, COUNT(*) AS n FROM reviews WHERE mpaa_rating IS NOT NULL GROUP BY 1 ORDER BY n DESC;",
+  "SELECT r.title, r.year FROM reviews_fts f JOIN reviews r ON r.id=f.rowid WHERE reviews_fts MATCH 'vampire' AND r.is_redirect=0 ORDER BY r.year;",
+];
+const DEFAULT_QUERY = EXAMPLES[0];
+---
+
+<Base title="Query" description="Run arbitrary read-only SQL against the review archive in your browser." active="query">
+  <h1>Query the archive</h1>
+  <p class="lede">
+    Runs SQL directly against <code>movies_web.db</code> in your browser via HTTP range
+    requests — nothing is uploaded. Read-only: a single <code>SELECT</code> or
+    <code>WITH</code> only.
+  </p>
+
+  <textarea id="sql" class="sql-editor" spellcheck="false">{DEFAULT_QUERY}</textarea>
+  <div class="toolbar">
+    <button id="run">Run</button>
+    <button id="csv" class="secondary" disabled>Download CSV</button>
+    <button id="json" class="secondary" disabled>Download JSON</button>
+    <span class="note" id="status">Ready.</span>
+  </div>
+  <p class="note" id="appended" hidden></p>
+  <div id="error" class="error" hidden></div>
+  <div class="results-wrap" id="resultsWrap" hidden><table class="results" id="results"></table></div>
+
+  <h2>Example queries</h2>
+  <p class="note">Click to load into the editor.</p>
+  {EXAMPLES.map((ex) => <pre class="example">{ex}</pre>)}
+
+  <details class="schema">
+    <summary>Schema &amp; rating reference</summary>
+    <p><strong>Table <code>reviews</code></strong> — one row per film (id 1–13694):</p>
+    <dl class="dl-list">
+      <dt>id</dt><dd>INTEGER primary key.</dd>
+      <dt>title, year</dt><dd>year is nullable (~3.6%).</dd>
+      <dt>cns_rating</dt><dd>USCCB rating: A-I, A-II, A-III, A-IV, L, O (nullable).</dd>
+      <dt>mpaa_rating</dt><dd>G / PG / PG-13 / R / NC-17 … (nullable, ~42%).</dd>
+      <dt>synopsis</dt><dd>Short capsule review.</dd>
+      <dt>full_review</dt><dd>Long review (1,619 films); paragraphs split by blank lines.</dd>
+      <dt>letter, filename</dt><dd>Source folder (a–z) and original archive path.</dd>
+      <dt>is_redirect</dt><dd>1 = "see other title" stub (322 rows). Add <code>is_redirect=0</code> to listings.</dd>
+    </dl>
+    <p><strong>Full-text:</strong> <code>reviews_fts</code> (FTS5) over title, synopsis, full_review,
+      keyed by <code>rowid = reviews.id</code>:</p>
+    <pre class="example">SELECT r.title, r.year FROM reviews_fts f JOIN reviews r ON r.id=f.rowid
+WHERE reviews_fts MATCH 'redemption' AND r.is_redirect=0 ORDER BY rank LIMIT 100;</pre>
+    <p><strong>USCCB legend:</strong> A-I general patronage · A-II adults and adolescents ·
+      A-III adults · A-IV adults with reservations · L limited adult audience · O morally offensive.</p>
+  </details>
+
+  <script>
+    import { createDbWorker } from 'sql.js-httpvfs';
+
+    const base = import.meta.env.BASE_URL;
+    const sqlEl = document.getElementById('sql');
+    const runEl = document.getElementById('run');
+    const csvEl = document.getElementById('csv');
+    const jsonEl = document.getElementById('json');
+    const statusEl = document.getElementById('status');
+    const appendedEl = document.getElementById('appended');
+    const errorEl = document.getElementById('error');
+    const wrapEl = document.getElementById('resultsWrap');
+    const tableEl = document.getElementById('results');
+    const RENDER_CAP = 1000;
+
+    let workerPromise = null;
+    function getWorker() {
+      if (!workerPromise) {
+        workerPromise = createDbWorker(
+          [{ from: 'inline', config: { serverMode: 'full', url: base + 'movies_web.db', requestChunkSize: 4096 } }],
+          base + 'sqlite.worker.js',
+          base + 'sql-wasm.wasm'
+        );
+      }
+      return workerPromise;
+    }
+
+    const esc = (s) =>
+      String(s ?? '').replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    // Read-only guardrail: accept exactly one SELECT/WITH statement.
+    function guard(raw) {
+      let sql = raw.trim().replace(/;\s*$/, ''); // allow one trailing semicolon
+      if (!sql) throw new Error('Enter a query.');
+      if (sql.includes(';')) throw new Error('Only a single statement is allowed (remove extra ";").');
+      // Strip comments before keyword inspection.
+      const bare = sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
+      if (!/^\s*(select|with)\b/i.test(bare))
+        throw new Error('Only SELECT / WITH queries are allowed.');
+      if (/\b(insert|update|delete|drop|alter|create|replace|attach|detach|pragma|vacuum|reindex|begin|commit|rollback)\b/i.test(bare))
+        throw new Error('Write / schema / PRAGMA statements are not allowed.');
+      let appended = false;
+      if (!/\blimit\b/i.test(bare)) { sql += ` LIMIT ${RENDER_CAP}`; appended = true; }
+      return { sql, appended };
+    }
+
+    function toCSV(cols, rows) {
+      const cell = (v) => {
+        const s = v == null ? '' : String(v);
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+      return [cols.join(','), ...rows.map((r) => cols.map((c) => cell(r[c])).join(','))].join('\n');
+    }
+    function download(name, text, type) {
+      const blob = new Blob([text], { type });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    let lastCols = [], lastRows = [];
+
+    async function run() {
+      errorEl.hidden = true;
+      appendedEl.hidden = true;
+      let plan;
+      try { plan = guard(sqlEl.value); }
+      catch (e) { errorEl.hidden = false; errorEl.textContent = e.message; return; }
+
+      runEl.disabled = true;
+      csvEl.disabled = jsonEl.disabled = true;
+      statusEl.textContent = 'Running…';
+      const t0 = performance.now();
+      try {
+        const worker = await getWorker();
+        const rows = await worker.db.query(plan.sql);
+        const ms = Math.round(performance.now() - t0);
+        lastRows = rows;
+        lastCols = rows.length ? Object.keys(rows[0]) : [];
+        renderTable(lastCols, rows);
+        statusEl.textContent = `${rows.length.toLocaleString()} row${rows.length === 1 ? '' : 's'} in ${ms} ms` +
+          (rows.length > RENDER_CAP ? ` (showing first ${RENDER_CAP.toLocaleString()})` : '');
+        if (plan.appended) {
+          appendedEl.hidden = false;
+          appendedEl.textContent = `No LIMIT given — automatically appended LIMIT ${RENDER_CAP}.`;
+        }
+        csvEl.disabled = jsonEl.disabled = rows.length === 0;
+      } catch (e) {
+        errorEl.hidden = false;
+        errorEl.textContent = String(e && e.message ? e.message : e);
+        statusEl.textContent = 'Error.';
+      } finally {
+        runEl.disabled = false;
+      }
+    }
+
+    function renderTable(cols, rows) {
+      if (!rows.length) { wrapEl.hidden = false; tableEl.innerHTML = '<tr><td>No rows.</td></tr>'; return; }
+      const head = '<thead><tr>' + cols.map((c) => `<th>${esc(c)}</th>`).join('') + '</tr></thead>';
+      const body = rows.slice(0, RENDER_CAP)
+        .map((r) => '<tr>' + cols.map((c) => `<td>${esc(r[c])}</td>`).join('') + '</tr>')
+        .join('');
+      tableEl.innerHTML = head + '<tbody>' + body + '</tbody>';
+      wrapEl.hidden = false;
+    }
+
+    runEl.addEventListener('click', run);
+    sqlEl.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); run(); }
+    });
+    csvEl.addEventListener('click', () => download('query.csv', toCSV(lastCols, lastRows), 'text/csv'));
+    jsonEl.addEventListener('click', () => download('query.json', JSON.stringify(lastRows, null, 2), 'application/json'));
+    document.querySelectorAll('pre.example').forEach((pre) =>
+      pre.addEventListener('click', () => { sqlEl.value = pre.textContent.trim(); sqlEl.focus(); })
+    );
+  </script>
+</Base>

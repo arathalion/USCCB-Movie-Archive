@@ -1,0 +1,59 @@
+---
+import Base from '../../layouts/Base.astro';
+import { getDb } from '../../lib/db.js';
+import { slugById } from '../../lib/films.js';
+import { USCCB_LEGEND } from '../../lib/ratings.js';
+
+export function getStaticPaths() {
+  // One page per film, excluding "see other title" redirect stubs.
+  // tmdb_id is intentionally not selected: it is not a column in movies_web.db.
+  // To enable TMDB posters, add the column (see scripts/apply_tmdb.py) and read it here.
+  const rows = getDb()
+    .prepare(
+      `SELECT id, title, year, cns_rating, mpaa_rating, synopsis, full_review
+       FROM reviews
+       WHERE is_redirect = 0`
+    )
+    .all();
+
+  return rows.map((film) => ({
+    params: { slug: slugById.get(film.id) },
+    props: { film },
+  }));
+}
+
+const { film } = Astro.props;
+const base = import.meta.env.BASE_URL;
+const usccb = film.cns_rating;
+const paragraphs = film.full_review
+  ? String(film.full_review).split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)
+  : [];
+const desc = (film.synopsis || '').slice(0, 160);
+---
+
+<Base title={film.title} description={desc} active="browse">
+  <p class="backlink"><a href={base}>← Back to browse</a></p>
+  <h1>{film.title}</h1>
+  <p class="meta">
+    {film.year ?? 'Year unknown'}
+    <span class="chip-row" style="display:inline-flex; margin-left:0.6rem;">
+      {usccb && <span class="chip usccb" title={USCCB_LEGEND[usccb] ?? ''}>{usccb}</span>}
+      {film.mpaa_rating && <span class="chip">{film.mpaa_rating}</span>}
+    </span>
+  </p>
+
+  {film.synopsis && <p class="synopsis">{film.synopsis}</p>}
+
+  {paragraphs.length > 0 && (
+    <section class="review">
+      <h2>Full review</h2>
+      {paragraphs.map((p) => <p>{p}</p>)}
+    </section>
+  )}
+
+  {usccb && (
+    <p class="note" style="margin-top:1.5rem;">
+      USCCB rating <strong>{usccb}</strong>: {USCCB_LEGEND[usccb]}.
+    </p>
+  )}
+</Base>
