@@ -33,6 +33,11 @@ jobs:
           # base path from the repo name so asset/range-request URLs are correct.
           # For a user/root site or custom domain, set this to "/".
           BASE_PATH: /${{ github.event.repository.name }}/
+          # Canonical data is read from Supabase Postgres at build time. These are
+          # the public anon/publishable values (no secret); add them as repo secrets
+          # under Settings → Secrets and variables → Actions.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
   deploy:
     needs: build

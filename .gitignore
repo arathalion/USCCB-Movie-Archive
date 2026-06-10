@@ -10,6 +10,10 @@ dist/
 # Transient SQLite journal
 data/*.db-journal
 
+# Local secrets (Supabase keys). .env.example is committed as a template.
+.env
+.env.local
+
 # Raw source archive (167 MB of original .shtml pages, a–z). This is the
 # provenance for movies_web.db but is NOT used by the site or the build, so it
 # is kept out of the deploy repo to keep clones and CI checkouts fast.
