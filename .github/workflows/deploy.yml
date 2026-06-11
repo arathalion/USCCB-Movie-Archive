@@ -15,6 +15,13 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+# Silence the DEP0040 "punycode is deprecated" warning. It comes from upstream
+# tooling on Node 24+ (npm and the bundled GitHub actions reference the built-in
+# punycode module) — not from this project's code — so target just that warning
+# rather than disabling deprecation warnings wholesale.
+env:
+  NODE_OPTIONS: --disable-warning=DEP0040
+
 jobs:
   build:
     runs-on: ubuntu-latest
