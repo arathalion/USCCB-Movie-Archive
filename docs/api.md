@@ -27,7 +27,7 @@ curl "$BASE/public_movies_api?select=title,year&limit=5" \
 
 ## The `public_movies_api` resource
 
-One row per real film (13,371 total). This curated view is the recommended
+One row per real film (13,205 total). This curated view is the recommended
 entry point — it exposes only public-facing columns and folds in TMDB
 enrichment + genres:
 
@@ -108,8 +108,8 @@ All are public, read-only:
 
 - **`movies`** — the canonical table (everything in the view, minus `genres`, plus
   `full_review`, `letter`, `source_file`, and `search_tsv`).
-- **`redirects`** — 322 "see other title" alias stubs (`slug`, `title`,
-  `target_title`, `target_movie_id` → `movies.id`, resolved for 305).
+- **`redirects`** — 330 "see other title" alias stubs (`slug`, `title`,
+  `target_title`, `target_movie_id` → `movies.id`, resolved for 311).
 - **`usccb_ratings`** — rating lookup (`code`, `label`, `description`, `sort_order`).
 - **`genres`** / **`movie_genres`** — genre names and the M2M links.
 - **`movie_tmdb`** — raw TMDB enrichment (1:1 with `movies` on `movie_id`).

@@ -36,7 +36,7 @@ const DEFAULT_QUERY = EXAMPLES[0];
 
   <details class="schema">
     <summary>Schema &amp; rating reference</summary>
-    <p><strong>Table <code>movies</code></strong> — one row per film (13,371 real films):</p>
+    <p><strong>Table <code>movies</code></strong> — one row per film (13,205 real films):</p>
     <dl class="dl-list">
       <dt>id, slug</dt><dd>integer primary key; <code>slug</code> is the URL key.</dd>
       <dt>title, year</dt><dd>year is nullable (~3.6%).</dd>
@@ -45,7 +45,7 @@ const DEFAULT_QUERY = EXAMPLES[0];
       <dt>synopsis, full_review</dt><dd>capsule; long review (1,619 films, paragraphs split by blank lines).</dd>
       <dt>letter, source_file</dt><dd>source folder (a–z) and original archive path.</dd>
     </dl>
-    <p><code>movies</code> holds only real films now; the 322 “see other title” alias stubs live
+    <p><code>movies</code> holds only real films now; the 330 “see other title” alias stubs live
       in a separate <code>redirects</code> table, and TMDB data is in <code>movie_tmdb</code> (join on
       <code>movie_id</code>).</p>
     <p><strong>Full-text search</strong> uses a Postgres <code>tsvector</code> column <code>search_tsv</code>

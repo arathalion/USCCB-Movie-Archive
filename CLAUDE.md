@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An **Astro site deployed to GitHub Pages** for an archive of **13,371 USCCB / Catholic News Service movie reviews** (coverage **1905–2011**). `WEBSITE_BUILD_SPEC.md` is the original spec; `README.md` documents the as-built site. **Supabase Postgres is the single source of truth** — static pages and the SQLite/CSV exports all derive from it.
+An **Astro site deployed to GitHub Pages** for an archive of **13,205 USCCB / Catholic News Service movie reviews** (coverage **1905–2011**). `WEBSITE_BUILD_SPEC.md` is the original spec; `README.md` documents the as-built site. **Supabase Postgres is the single source of truth** — static pages and the SQLite/CSV exports all derive from it.
 
 The site began as a fully static SQLite-in-browser build and migrated to Supabase over an 8-phase plan (`~/.claude/plans/quirky-jumping-phoenix.md`). **Phases 1–7 are done** (live-browse/`/query` rework; submissions; filtering/URL-state; TMDB enrichment — ~12.4k films with posters/genres in `movie_tmdb`; schema refactor — `movie_tmdb` 1:1 split + `redirects` table; **public read-only API via the `public_movies_api` view, documented in `docs/api.md`**). **Only the optional phase 8 admin SPA remains.** See the phase table in `README.md`. Work the migration **in auto mode but pause between phases** — implement one, report, wait for the user before the next.
 
@@ -15,7 +15,7 @@ Rendering is hybrid: detail pages are **static** (built from Postgres); browse, 
 - `src/pages/` — `index.astro` (**live** Supabase browse: `textSearch` + USCCB/MPAA/year filters + A–Z letter bar on `movies.letter` + sort + clickable rating chips, with shareable `?q=&usccb=&letter=…` URL state via `replaceState`), `film/[slug].astro` (one **static** page per non-redirect film, built from Postgres; renders TMDB poster/genre chips/TMDB link when enriched), `query.astro` (server-side SQL editor via the `run_read_only_sql()` RPC), `submit.astro` (public submission form → Turnstile + `submit-movie` Edge Function), `about.astro`.
 - `src/lib/` — `db.js` (build-time `supabase-js` reader; exports `getFilmsForDetail()`, paginates past PostgREST's 1000-row cap with `.range()`; anon key, read-only), `ratings.js` (USCCB legend).
 - `supabase/functions/submit-movie/` — Edge Function (`verify_jwt=false`): verifies a Cloudflare Turnstile token server-side, validates input, inserts the submission via the **service role**. The only write path to `movie_submissions`. Needs the `TURNSTILE_SECRET` function secret (falls back to Cloudflare's always-pass test secret if unset).
-- `supabase/migrations/` — schema, indexes, RLS policies, `run_read_only_sql()` RPC (190001), anon-grant hardening (190002/190003), submissions-via-function (200001: revokes direct anon INSERT), `movies.letter` index (210001), `movie_tmdb` split (220001), `redirects` extraction + drop `movies.is_redirect` (230001), redirect-target resolution (240001), `public_movies_api` view + genres + revoke-all/grant-select (250001). SECURITY DEFINER helpers (`is_moderator`, submission-status trigger) live in a non-exposed `private` schema.
+- `supabase/migrations/` — schema, indexes, RLS policies, `run_read_only_sql()` RPC (190001), anon-grant hardening (190002/190003), submissions-via-function (200001: revokes direct anon INSERT), `movies.letter` index (210001), `movie_tmdb` split (220001), `redirects` extraction + drop `movies.is_redirect` (230001), redirect-target resolution (240001), `public_movies_api` view + genres + revoke-all/grant-select (250001), 8 missed redirect stubs extracted (260001), 158 content-less placeholder records removed (270001). SECURITY DEFINER helpers (`is_moderator`, submission-status trigger) live in a non-exposed `private` schema.
 - `docs/api.md` — public read-only API reference (Phase 7): the anon PostgREST endpoint over the `public_movies_api` view (curated safe columns + `genres[]`), with filtering/sorting/paging/full-text-search examples. Linked from the About page.
 - `scripts/import_to_postgres.mjs` — one-time data load into Postgres (**service-role key**, bypasses RLS).
 - `scripts/export_sqlite.mjs` — regenerates `public/movies_web.db` (legacy `reviews` schema + FTS5) and `export/films_full.csv` **from** Postgres. Runs on `prebuild`; outputs are **git-ignored build artifacts**, shipped under `dist/downloads/`, no longer read at runtime.
@@ -31,7 +31,7 @@ Project ref `vjtavurzjxfjczpvtpdq` ("Movie-Archive", Postgres 17, us-west-2). Th
 
 ## Database schema (Postgres)
 
-Table `movies` — **real films only** (13,371 rows; ids are the original archive ids, with gaps where redirects/missing ids were removed):
+Table `movies` — **real films only** (13,205 rows; ids are the original archive ids, with gaps where redirects/missing ids were removed):
 
 `id` (PK), `slug` (UNIQUE, stable URL key), `title`, `year` (smallint, ~3.6% null), `usccb_code` (FK → `usccb_ratings.code`: A-I/A-II/A-III/A-IV/L/O, nullable; was `cns_rating`), `mpaa_rating` (~42% null), `synopsis` (capsule, ~99%), `full_review` (long-form, 1,619 films, `\n\n` paragraph breaks preserved), `letter` (a–z source folder, article-aware), `source_file` (original archive path; was `filename`). No `is_redirect` column — stubs live in `redirects` (see below). TMDB data lives in `movie_tmdb`, not on `movies`.
 
@@ -50,7 +50,7 @@ supabase.from('movies').select('slug,title,year,usccb_code,mpaa_rating', { count
 Related tables:
 - `movie_tmdb` (1:1, `movie_id` PK → movies) — TMDB enrichment: `tmdb_id`, `tmdb_title`, `tmdb_release_date`, `poster_path`, `backdrop_path`, `overview`, `popularity`, `vote_average`, `enriched_at`. Populated by `apply_tmdb.mjs` (~12.4k films).
 - `genres` / `movie_genres` — M2M genre links (from TMDB).
-- `redirects` — the 322 "see other title" alias stubs (`id`, `slug`, `title`, `synopsis`, `letter`, `source_file`, `target_title`, `target_movie_id` → movies, resolved for ~300). Kept out of `movies` so listings need no filter; `export_sqlite.mjs` UNIONs them back for the legacy download.
+- `redirects` — the 330 "see other title" alias stubs (`id`, `slug`, `title`, `synopsis`, `letter`, `source_file`, `target_title`, `target_movie_id` → movies, resolved for ~311). Kept out of `movies` so listings need no filter; `export_sqlite.mjs` UNIONs them back for the legacy download.
 - `usccb_ratings` (lookup); `moderators`, `movie_submissions`, `submission_review_events` (Phase 4/8).
 
 USCCB legend: A-I general patronage · A-II adults and adolescents · A-III adults · A-IV adults with reservations (treat as L) · L limited adult audience · O morally offensive.
@@ -75,7 +75,7 @@ BASE_PATH=/repo/ npm run build   # simulate a project-path GitHub Pages build
 Quick data inspection (against Postgres, via the MCP `execute_sql` tool or psql):
 
 ```sql
-select count(*) from movies;  -- 13371 (real films; redirects are in their own table)
+select count(*) from movies;  -- 13205 (real films; redirects are in their own table)
 ```
 
 ## Invariants to preserve

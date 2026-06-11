@@ -1,6 +1,6 @@
 # USCCB Movie Reviews Archive
 
-An archive of **13,371 USCCB / Catholic News Service movie reviews** (coverage
+An archive of **13,205 USCCB / Catholic News Service movie reviews** (coverage
 **1905–2011**). The public site is built with **Astro** and deployed to **GitHub
 Pages**; the data lives in **Supabase Postgres**, which is the single source of
 truth. Detail pages are pre-rendered at build time from Postgres, while browse and
@@ -28,12 +28,12 @@ CI). These are the public anon/publishable values — no secret is needed to bui
 ## How it works
 
 - **Source of truth:** Supabase Postgres (project `vjtavurzjxfjczpvtpdq`). The `movies`
-  table holds one row per real film (13,371), with a generated `search_tsv` tsvector for
-  full-text search. TMDB enrichment is a 1:1 `movie_tmdb` table; the 322 "see other title"
+  table holds one row per real film (13,205), with a generated `search_tsv` tsvector for
+  full-text search. TMDB enrichment is a 1:1 `movie_tmdb` table; the 330 "see other title"
   alias stubs are a separate `redirects` table (so `movies` needs no `is_redirect` filter).
   Plus `usccb_ratings`, `genres`/`movie_genres`, and the submission/moderation tables.
 - **Detail pages (`/film/{slug}`)** are pre-rendered at build time — one static page
-  per non-redirect film (~13,371). `src/lib/db.js` reads Postgres with `supabase-js`
+  per non-redirect film (~13,205). `src/lib/db.js` reads Postgres with `supabase-js`
   (anon key), paginating past PostgREST's 1000-row cap and embedding each film's genres.
   When a film has TMDB data, the page also shows its poster, genre chips, and a TMDB link.
 - **Browse (`/`)** runs **live in the browser**: full-text `textSearch` on `search_tsv`
