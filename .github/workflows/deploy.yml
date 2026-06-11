@@ -15,6 +15,12 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+# Run JS actions on the Node.js 24 runtime now (the default from 2026-06-16),
+# clearing the "Node.js 20 actions are deprecated" warning. Covers the actions
+# nested inside withastro/action (checkout/setup-node/upload-artifact) too.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     runs-on: ubuntu-latest
