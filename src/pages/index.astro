@@ -3,6 +3,7 @@ import Base from '../layouts/Base.astro';
 import { USCCB_ORDER, USCCB_LEGEND } from '../lib/ratings.js';
 
 const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
+const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
 ---
 
 <Base title="Browse" description="Search and filter 13,694 USCCB / Catholic News Service movie reviews (1905–2011)." active="browse">
@@ -40,7 +41,15 @@ const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
     </div>
   </div>
 
-  <p class="count" id="count">Loading…</p>
+  <nav class="az-bar" id="azBar" aria-label="Browse by letter">
+    <button type="button" class="az" data-letter="">All</button>
+    {LETTERS.map((l) => <button type="button" class="az" data-letter={l}>{l}</button>)}
+  </nav>
+
+  <div class="count-row">
+    <p class="count" id="count">Loading…</p>
+    <button type="button" id="reset" class="linkish" hidden>Clear filters</button>
+  </div>
   <ul class="films" id="films"></ul>
   <div class="center">
     <button id="more" class="secondary" hidden>Show more</button>
@@ -49,6 +58,22 @@ const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
 
 <style>
   .controls .filters .year-in { width: 6.5rem; }
+
+  .az-bar { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0 0 1rem; }
+  .az-bar .az {
+    background: #fff; color: var(--ink); border: 1px solid var(--line);
+    padding: 0.2rem 0.5rem; font-size: 0.8rem; border-radius: 4px;
+    min-width: 1.9rem; text-transform: uppercase;
+  }
+  .az-bar .az:hover { background: var(--code-bg); }
+  .az-bar .az.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+  .count-row { display: flex; align-items: baseline; gap: 0.75rem; }
+  .linkish {
+    background: none; border: none; color: var(--accent); padding: 0;
+    font-size: 0.85rem; text-decoration: underline; cursor: pointer;
+  }
+  .linkish:hover { background: none; }
 </style>
 
 <script>
@@ -60,6 +85,8 @@ const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
   );
   const base = import.meta.env.BASE_URL;
   const PAGE = 100;
+  const DEFAULT_SORT = 'title:asc';
+  const SORTS = new Set(['title:asc', 'year:desc', 'year:asc', 'usccb_code:asc']);
 
   const USCCB_TT = {
     'A-I': 'General patronage', 'A-II': 'Adults and adolescents', 'A-III': 'Adults',
@@ -79,8 +106,16 @@ const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
   const countEl = document.getElementById('count');
   const listEl = document.getElementById('films');
   const moreEl = document.getElementById('more');
+  const azBar = document.getElementById('azBar');
+  const resetEl = document.getElementById('reset');
 
   let offset = 0, total = 0, loading = false;
+  let letter = '';
+
+  function hasFilters() {
+    return !!(qEl.value.trim() || usccbEl.value || mpaaEl.value || letter ||
+      yminEl.value || ymaxEl.value || sortEl.value !== DEFAULT_SORT);
+  }
 
   function buildQuery() {
     let q = supabase
@@ -91,6 +126,7 @@ const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
     if (text) q = q.textSearch('search_tsv', text, { type: 'websearch', config: 'english' });
     if (usccbEl.value) q = q.eq('usccb_code', usccbEl.value);
     if (mpaaEl.value) q = q.eq('mpaa_rating', mpaaEl.value);
+    if (letter) q = q.eq('letter', letter);
     if (yminEl.value) q = q.gte('year', Number(yminEl.value));
     if (ymaxEl.value) q = q.lte('year', Number(ymaxEl.value));
     const [col, dir] = sortEl.value.split(':');
@@ -99,19 +135,62 @@ const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
     return q;
   }
 
+  // ---- Shareable URL state (read on load / back-forward, write on every change) ----
+  function syncUrl() {
+    const p = new URLSearchParams();
+    if (qEl.value.trim()) p.set('q', qEl.value.trim());
+    if (usccbEl.value) p.set('usccb', usccbEl.value);
+    if (mpaaEl.value) p.set('mpaa', mpaaEl.value);
+    if (letter) p.set('letter', letter);
+    if (yminEl.value) p.set('ymin', yminEl.value);
+    if (ymaxEl.value) p.set('ymax', ymaxEl.value);
+    if (sortEl.value !== DEFAULT_SORT) p.set('sort', sortEl.value);
+    const qs = p.toString();
+    history.replaceState(null, '', qs ? `${location.pathname}?${qs}` : location.pathname);
+  }
+
+  function readUrl() {
+    const p = new URLSearchParams(location.search);
+    qEl.value = p.get('q') || '';
+    usccbEl.value = p.get('usccb') || '';
+    mpaaEl.value = p.get('mpaa') || '';
+    yminEl.value = p.get('ymin') || '';
+    ymaxEl.value = p.get('ymax') || '';
+    const s = p.get('sort') || DEFAULT_SORT;
+    sortEl.value = SORTS.has(s) ? s : DEFAULT_SORT;
+    letter = (p.get('letter') || '').toLowerCase();
+    updateAz();
+  }
+
+  function updateAz() {
+    azBar.querySelectorAll('.az').forEach((b) =>
+      b.classList.toggle('active', (b.dataset.letter || '') === letter));
+  }
+
   function rowHtml(f) {
-    const chips =
-      (f.usccb_code ? `<span class="chip usccb" title="${esc(USCCB_TT[f.usccb_code] || '')}">${esc(f.usccb_code)}</span>` : '') +
-      (f.mpaa_rating ? `<span class="chip">${esc(f.mpaa_rating)}</span>` : '');
+    const usccb = f.usccb_code
+      ? `<span class="chip usccb" role="button" tabindex="0" data-usccb="${esc(f.usccb_code)}" ` +
+        `title="Filter by ${esc(f.usccb_code)} — ${esc(USCCB_TT[f.usccb_code] || '')}">${esc(f.usccb_code)}</span>`
+      : '';
+    const mpaa = f.mpaa_rating
+      ? `<span class="chip" role="button" tabindex="0" data-mpaa="${esc(f.mpaa_rating)}" ` +
+        `title="Filter by ${esc(f.mpaa_rating)}">${esc(f.mpaa_rating)}</span>`
+      : '';
     return `<li><span class="title"><a href="${base}film/${esc(f.slug)}">${esc(f.title)}</a></span>` +
-      `<span class="chip-row">${chips}</span>` +
+      `<span class="chip-row">${usccb}${mpaa}</span>` +
       `<span class="year">${f.year ?? '—'}</span></li>`;
   }
 
   async function load(reset) {
     if (loading) return;
     loading = true;
-    if (reset) { offset = 0; listEl.innerHTML = ''; countEl.textContent = 'Searching…'; }
+    if (reset) {
+      offset = 0;
+      listEl.innerHTML = '';
+      countEl.textContent = 'Searching…';
+      resetEl.hidden = !hasFilters();
+      syncUrl();
+    }
     try {
       const { data, count, error } = await buildQuery().range(offset, offset + PAGE - 1);
       if (error) throw error;
@@ -130,6 +209,41 @@ const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
     }
   }
 
+  // ---- Clickable rating chips → set the matching filter ----
+  function chipActivate(chip) {
+    if (chip.dataset.usccb) usccbEl.value = chip.dataset.usccb;
+    else if (chip.dataset.mpaa) mpaaEl.value = chip.dataset.mpaa;
+    else return;
+    load(true);
+  }
+  listEl.addEventListener('click', (e) => {
+    const chip = e.target.closest('.chip');
+    if (chip) chipActivate(chip);
+  });
+  listEl.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const chip = e.target.closest('.chip');
+    if (chip) { e.preventDefault(); chipActivate(chip); }
+  });
+
+  // ---- A–Z letter bar ----
+  azBar.addEventListener('click', (e) => {
+    const b = e.target.closest('.az');
+    if (!b) return;
+    letter = b.dataset.letter || '';
+    updateAz();
+    load(true);
+  });
+
+  // ---- Clear all filters ----
+  resetEl.addEventListener('click', () => {
+    qEl.value = usccbEl.value = mpaaEl.value = yminEl.value = ymaxEl.value = '';
+    sortEl.value = DEFAULT_SORT;
+    letter = '';
+    updateAz();
+    load(true);
+  });
+
   let t;
   const debounced = () => { clearTimeout(t); t = setTimeout(() => load(true), 200); };
   qEl.addEventListener('input', debounced);
@@ -139,6 +253,8 @@ const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
   mpaaEl.addEventListener('change', () => load(true));
   sortEl.addEventListener('change', () => load(true));
   moreEl.addEventListener('click', () => load(false));
+  window.addEventListener('popstate', () => { readUrl(); load(true); });
 
+  readUrl();
   load(true);
 </script>

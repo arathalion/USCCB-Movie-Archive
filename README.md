@@ -1,67 +1,143 @@
 # USCCB Movie Reviews Archive
 
-A self-contained static website for an archive of **13,694 USCCB / Catholic News
-Service movie reviews** (coverage **1905–2011**). The SQLite database is the single
-source of truth: browse and detail pages are generated statically at build time, and
-a power-user `/query` page runs arbitrary read-only SQL **entirely in the browser**
-via HTTP range requests — no backend, no server, no database service.
+An archive of **13,694 USCCB / Catholic News Service movie reviews** (coverage
+**1905–2011**). The public site is built with **Astro** and deployed to **GitHub
+Pages**; the data lives in **Supabase Postgres**, which is the single source of
+truth. Detail pages are pre-rendered at build time from Postgres, while browse and
+SQL run live against Supabase from the browser.
+
+> Migrating from the original static SQLite-in-browser site to a Supabase backend.
+> Phases 1–3 (plus the live browse/query rework) are done; phases 4–8 are planned.
+> See [Status & phases](#status--phases) below. `CLAUDE.md` predates this rework and
+> is partly stale.
 
 ## Quick start
 
 ```bash
 npm install        # also approves esbuild/sharp install scripts if prompted
+cp .env.example .env   # values are public (anon key); fine to commit-as-template
 npm run dev        # local dev server at http://localhost:4321
-npm run build      # static site → dist/
-npm run preview    # serve the built dist/ locally (supports range requests)
+npm run build      # prebuild regenerates the SQLite/CSV exports, then static site → dist/
+npm run preview    # serve the built dist/ locally
 ```
 
-Requires **Node ≥ 24** (build-time DB reads use the built-in `node:sqlite`; verified
-on Node 26).
+Requires **Node ≥ 24** (CI uses Node 26). The build reads Supabase at build time, so
+`SUPABASE_URL` / `SUPABASE_ANON_KEY` must be set (via `.env` locally, repo secrets in
+CI). These are the public anon/publishable values — no secret is needed to build.
 
 ## How it works
 
-- **Source of truth:** `public/movies_web.db` (~23 MB, 4096-byte pages + an FTS5
-  full-text index). It is committed to the repo and served at the site root.
-- **Browse (`/`)** loads a slim, build-generated `films-index.json` and filters/searches
-  client-side. **Detail pages (`/film/{slug}`)** are pre-rendered from the DB at build
-  time — one static page per non-redirect film. **`/query`** loads the DB in the browser
-  with `sql.js-httpvfs`, fetching only the pages each query touches.
-- The build reads the DB with Node's **`node:sqlite`** (no native module to compile —
-  this is a deliberate substitution for the `better-sqlite3` the original spec named).
-- URL **slugs** come from `export/films.json` (stable + unique).
+- **Source of truth:** Supabase Postgres (project `vjtavurzjxfjczpvtpdq`). The `movies`
+  table holds one row per film (ids 1–13694), with a generated `search_tsv` tsvector
+  for full-text search. Lookup/relation tables: `usccb_ratings`, `genres`,
+  `movie_genres`; submission/moderation tables exist for later phases.
+- **Detail pages (`/film/{slug}`)** are pre-rendered at build time — one static page
+  per non-redirect film (~13,372). `src/lib/db.js` reads Postgres with `supabase-js`
+  (anon key), paginating past PostgREST's 1000-row cap.
+- **Browse (`/`)** runs **live in the browser**: full-text `textSearch` on `search_tsv`
+  plus USCCB/MPAA/year filters, an A–Z letter bar (on the article-aware `letter` bucket),
+  sort, clickable rating chips, and "show more" pagination — all querying Supabase directly
+  with the public anon key. Filter state is reflected in the URL (`?q=&usccb=&letter=…`), so
+  any view is shareable and bookmarkable.
+- **Submit (`/submit`)** lets anyone suggest a film. The form calls the `submit-movie`
+  **Edge Function**, which verifies a Cloudflare Turnstile token server-side and inserts
+  the row (status `pending`) via the service role — direct anon INSERT is revoked, so the
+  function is the only write path. Moderators review the queue in Supabase Studio.
+- **`/query`** is a **server-side read-only SQL editor**. The browser calls the
+  `run_read_only_sql()` Postgres function (SECURITY INVOKER → anon RLS + grants apply):
+  a single `SELECT`/`WITH` only, read-only transaction, 5-second statement timeout,
+  1000-row cap. Queries hit the Postgres `movies` schema.
+- **SQLite + CSV** are **derived build artifacts**, regenerated from Postgres by
+  `scripts/export_sqlite.mjs` on every `prebuild` and shipped under `dist/downloads/`
+  for download. They are git-ignored and no longer read at runtime.
+- **URL slugs** are stored on each `movies` row (the stable, unique URL contract).
 
 ## Project layout
 
 ```
-public/movies_web.db        # shipped DB (source of truth); served at site root
-public/sqlite.worker.js     # copied from sql.js-httpvfs by scripts/copy-sqljs.mjs
-public/sql-wasm.wasm        #   (pre{dev,build} step) — do not edit by hand
-src/pages/                  # index (browse), film/[slug], query, about, films-index.json
-src/lib/                    # db.js (node:sqlite), films.js (slug map), ratings.js
-export/                     # data exports for a separate site; films.json is used here for slugs
-scripts/                    # copy-sqljs.mjs; tmdb_match.py / apply_tmdb.py (optional TMDB enrichment)
-data/movies.db              # original pre-FTS DB (not shipped)
+src/pages/                  # index (live browse), film/[slug] (static detail), query (SQL), about
+src/lib/                    # db.js (supabase-js build-time reader), ratings.js (USCCB legend)
+supabase/migrations/        # schema, indexes, RLS, run_read_only_sql, anon-grant hardening
+scripts/import_to_postgres.mjs   # one-time data load into Postgres (service-role key)
+scripts/export_sqlite.mjs        # regenerate public/movies_web.db + CSV FROM Postgres (prebuild)
+scripts/tmdb_match.py, apply_tmdb.py   # optional TMDB enrichment pipeline (Phase 6)
+export/films.json           # original exports for a separate site (not used by this build)
+data/movies.db              # original pre-FTS SQLite (not shipped)
 source-archive/             # raw .shtml provenance (a–z); git-ignored, not used by the site
 ```
 
+## Configuration
+
+Copy `.env.example` to `.env`. Keys:
+
+| Var | Used by | Notes |
+|---|---|---|
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | build (`db.js`) | public anon values; read-only |
+| `PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY` | browser (browse + `/query`) | Astro inlines `PUBLIC_*` into the client bundle |
+| `PUBLIC_TURNSTILE_SITE_KEY` | browser (`/submit`) | Cloudflare Turnstile site key; defaults to Cloudflare's always-pass test key |
+| `SUPABASE_SERVICE_ROLE_KEY` | `scripts/import_to_postgres.mjs` only | **secret** — bypasses RLS; never commit, never ship to the client |
+
+In CI, the public values come from repo secrets `SUPABASE_URL` / `SUPABASE_ANON_KEY`
+(and optionally `TURNSTILE_SITE_KEY`); see `.github/workflows/deploy.yml`.
+
+### Public submissions (Phase 4)
+
+`/submit` works out of the box with Cloudflare's **test** Turnstile keys (the widget
+always passes). To enable real bot protection in production:
+
+1. Create a free **Cloudflare Turnstile** widget (dash.cloudflare.com → Turnstile),
+   adding your site's domain. You get a **site key** (public) and a **secret key**.
+2. Set the secret on the Edge Function:
+   `supabase secrets set TURNSTILE_SECRET=<secret-key>` (or Dashboard → Edge Functions →
+   `submit-movie` → Secrets).
+3. Publish the site key: set `PUBLIC_TURNSTILE_SITE_KEY` in `.env` and add a
+   `TURNSTILE_SITE_KEY` repo secret for CI.
+
+The `submit-movie` Edge Function (`supabase/functions/submit-movie/`) is the only write
+path to `movie_submissions`; deploy changes with `supabase functions deploy submit-movie`.
+Moderate the `pending` queue in Supabase Studio (set `status`, write `admin_notes`,
+link `linked_movie_id`; an `after`/`before update` trigger logs review events).
+
 ## Deploying to GitHub Pages
 
-1. Create a repo and push this folder to `main`. `public/movies_web.db` is committed
-   **normally — never via Git LFS** (Pages does not serve LFS over its CDN, which would
-   break range requests).
+1. Push to `main`. `.github/workflows/deploy.yml` builds with Astro (Node 26) and
+   publishes on every push.
 2. In **Settings → Pages**, set **Source = GitHub Actions**.
-3. The workflow in `.github/workflows/deploy.yml` builds with Astro and publishes on
-   every push to `main`. It sets `BASE_PATH=/<repo-name>/` automatically, so the site
-   works at `https://<user>.github.io/<repo>/`.
-   - For a **user/root site** (`<user>.github.io`) or a **custom domain at the root**,
-     change `BASE_PATH` in the workflow to `/`.
+3. Add repo secrets `SUPABASE_URL` and `SUPABASE_ANON_KEY` (public anon values) under
+   **Settings → Secrets and variables → Actions**.
+4. The workflow sets `BASE_PATH=/<repo-name>/` automatically, so the project site works
+   at `https://<user>.github.io/<repo>/`. For a user/root site or custom domain at the
+   root, set `BASE_PATH` to `/`.
 
-Local builds default to base `/`. To preview a project-path build locally:
+All client asset/link URLs go through `import.meta.env.BASE_URL`, so the project-path
+deploy works. Locally, preview a project-path build with
 `BASE_PATH=/your-repo/ npm run build`.
 
-## Optional: TMDB posters
+## Status & phases
 
-`public/movies_web.db` has no `tmdb_id` column. To add posters, run the enrichment
-scripts (see `scripts/` and `CLAUDE.md`), add a `tmdb_id` column to the shipped DB, and
-extend `src/pages/film/[slug].astro` to render the poster when the id is present. The
-TMDB API key must stay build-time only — never ship it to the client.
+Postgres is canonical; the public pages stay fast/static where possible and go live
+only for genuinely dynamic features. The 8-phase plan
+(`~/.claude/plans/quirky-jumping-phoenix.md`):
+
+| Phase | What | Status |
+|---|---|---|
+| 1 | Stabilize the static baseline (rollback point) | ✅ done |
+| 2 | Supabase schema + import 13,694 rows; swap the build to read Postgres | ✅ done |
+| 3 | Regenerate the SQLite + CSV exports **from** Postgres in `prebuild` | ✅ done |
+| — | Rework: **live** Supabase browse + **server-side** `/query` SQL editor; tighten anon grants (replaced the planned static `films-index.json` browse and the sql.js-httpvfs snapshot) | ✅ done |
+| 4 | Public `/submit` form → Turnstile-verified Edge Function → moderation via Supabase Studio | ✅ done |
+| 5 | Filtering, sorting, shareable URL state, A–Z navigation, clickable rating chips | ✅ done |
+| 6 | TMDB enrichment into Postgres (posters + metadata) | ⬜ next |
+| 7 | Public read-only API (PostgREST view over `public_movies_api`) | ⬜ planned |
+| 8 | Custom moderator admin SPA (only if Studio proves insufficient) | ⬜ planned |
+
+The live browse/query rework departed from the plan: a GitHub Pages quirk (it gzips
+files and serves *compressed* byte ranges) made the in-browser SQLite range-request
+DB unusable, so browse and `/query` now query Supabase directly instead.
+
+## Optional: TMDB posters (Phase 6, not yet wired)
+
+The `movies` table already has `tmdb_id` / `poster_path` / `overview` columns (nullable,
+unpopulated). `scripts/tmdb_match.py` + `apply_tmdb.py` are the enrichment pipeline.
+When run, detail pages can render posters where `poster_path` is present. The
+`TMDB_API_KEY` stays build/script-time only — never shipped to the client.

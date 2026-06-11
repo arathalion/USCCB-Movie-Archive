@@ -11,10 +11,11 @@ const base = import.meta.env.BASE_URL;
   <p>
     These 13,694 capsule and full-length film reviews were originally published by the
     <strong>USCCB Office for Film &amp; Broadcasting / Catholic News Service</strong>. They were
-    parsed from the original archive pages and stored in a single SQLite database, which is
-    the source of truth for this site. The collection spans from the early silent era through
-    2011, when the archive ends. This site is an independent reference copy and is not
-    affiliated with or endorsed by the USCCB; review text remains © its original publishers.
+    parsed from the original archive pages into a Postgres database (hosted on Supabase), which
+    is the source of truth for this site; the downloadable SQLite and CSV exports are generated
+    from it. The collection spans from the early silent era through 2011, when the archive ends.
+    This site is an independent reference copy and is not affiliated with or endorsed by the
+    USCCB; review text remains © its original publishers.
   </p>
 
   <h2>USCCB rating legend</h2>
@@ -29,15 +30,19 @@ const base = import.meta.env.BASE_URL;
 
   <h2>Using the query page</h2>
   <p>
-    The <a href={`${base}query`}>Query</a> page lets you run read-only SQL against the database
-    entirely in your browser — it fetches only the database pages each query needs via HTTP
-    range requests, so there is no server and nothing is uploaded. A few starting points:
+    The <a href={`${base}query`}>Query</a> page lets you run read-only SQL directly against the
+    live archive database. Queries are a single <code>SELECT</code>/<code>WITH</code>, run with a
+    5-second timeout, and return up to 1,000 rows. A few starting points:
   </p>
   <ul>
-    <li>Counts by USCCB rating: <code>SELECT cns_rating, COUNT(*) FROM reviews WHERE is_redirect=0 GROUP BY 1;</code></li>
-    <li>Full-text search is fastest via <code>reviews_fts MATCH '…'</code> rather than <code>LIKE '%…%'</code>.</li>
-    <li>Always add <code>is_redirect=0</code> to exclude the 322 "see other title" pointer stubs.</li>
+    <li>Counts by USCCB rating: <code>select usccb_code, count(*) from movies where not is_redirect group by 1;</code></li>
+    <li>Full-text search via the <code>search_tsv</code> column: <code>where search_tsv @@ websearch_to_tsquery('english', '…')</code> rather than <code>like '%…%'</code>.</li>
+    <li>Always add <code>not is_redirect</code> to exclude the 322 "see other title" pointer stubs.</li>
   </ul>
+  <p>
+    Spotted a film that's missing or mis-rated? You can <a href={`${base}submit`}>suggest one</a> —
+    submissions are reviewed by a moderator before anything is added.
+  </p>
   <p class="note">
     Notes on the data: <code>year</code> is missing for ~3.6% of films and <code>mpaa_rating</code>
     for ~42% (mostly pre-1968 and foreign titles). Full reviews exist for 1,619 films; the rest

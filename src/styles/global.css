@@ -68,6 +68,8 @@ h2 { font-size: 1.1rem; margin: 1.8rem 0 0.6rem; }
   white-space: nowrap;
 }
 .chip.usccb { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.chip[role="button"] { cursor: pointer; }
+.chip[role="button"]:hover { border-color: var(--ink); }
 .chip-row { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
 
 /* Controls */
