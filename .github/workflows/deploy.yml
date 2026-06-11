@@ -15,24 +15,16 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
-# Run JS actions on the Node.js 24 runtime now (the default from 2026-06-16),
-# clearing the "Node.js 20 actions are deprecated" warning. Covers the actions
-# nested inside withastro/action (checkout/setup-node/upload-artifact) too.
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Build with Astro
-        uses: withastro/action@v3
+        uses: withastro/action@v6
         with:
-          # Build-time DB reads use Node's built-in node:sqlite (no native module).
-          # Pinned to 26 to match the version this was verified against, where
-          # node:sqlite is available without an experimental flag.
+          # Pinned to 26 to match the version this site is verified against locally.
           node-version: 26
         env:
           # Project site lives at https://<user>.github.io/<repo>/ — derive the
@@ -61,4 +53,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
