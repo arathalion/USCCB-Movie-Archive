@@ -29,19 +29,37 @@ if (!url || !key) {
 const root = process.cwd();
 const supabase = createClient(url, key, { auth: { persistSession: false } });
 
-// Pull every row (redirects included — the legacy reviews table held all 13,694),
-// ordered by id, paginating past PostgREST's 1000-row cap.
+// The legacy `reviews` table held ALL rows (real films + redirect stubs) with an
+// is_redirect flag. Postgres now keeps those apart (movies + redirects tables), so
+// rebuild the combined set here: real films (is_redirect=0) + the stubs
+// (is_redirect=1), ordered by id. Keeps the public download byte-compatible.
 const PAGE = 1000;
-const cols = 'id, slug, title, year, usccb_code, mpaa_rating, synopsis, full_review, letter, source_file, is_redirect';
-const rows = [];
-for (let from = 0; ; from += PAGE) {
-  const { data, error } = await supabase
-    .from('movies').select(cols).order('id', { ascending: true }).range(from, from + PAGE - 1);
-  if (error) { console.error('Supabase read failed:', error.message); process.exit(1); }
-  rows.push(...data);
-  if (data.length < PAGE) break;
+async function fetchAll(table, cols) {
+  const out = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from(table).select(cols).order('id', { ascending: true }).range(from, from + PAGE - 1);
+    if (error) { console.error(`Supabase read failed (${table}):`, error.message); process.exit(1); }
+    out.push(...data);
+    if (data.length < PAGE) break;
+  }
+  return out;
 }
-console.log(`Read ${rows.length} rows from Postgres`);
+
+const films = (await fetchAll('movies',
+  'id, slug, title, year, usccb_code, mpaa_rating, synopsis, full_review, letter, source_file'
+)).map((r) => ({ ...r, is_redirect: 0 }));
+
+const redirects = (await fetchAll('redirects',
+  'id, slug, title, synopsis, letter, source_file'
+)).map((r) => ({
+  id: r.id, slug: r.slug, title: r.title, year: null, usccb_code: null,
+  mpaa_rating: null, synopsis: r.synopsis, full_review: null,
+  letter: r.letter, source_file: r.source_file, is_redirect: 1,
+}));
+
+const rows = [...films, ...redirects].sort((a, b) => a.id - b.id);
+console.log(`Read ${films.length} films + ${redirects.length} redirects = ${rows.length} rows from Postgres`);
 
 // ---------- Build the SQLite file ----------
 const dbPath = join(root, 'public', 'movies_web.db');

@@ -120,8 +120,7 @@ const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
   function buildQuery() {
     let q = supabase
       .from('movies')
-      .select('slug, title, year, usccb_code, mpaa_rating', { count: 'exact' })
-      .eq('is_redirect', false);
+      .select('slug, title, year, usccb_code, mpaa_rating', { count: 'exact' });
     const text = qEl.value.trim();
     if (text) q = q.textSearch('search_tsv', text, { type: 'websearch', config: 'english' });
     if (usccbEl.value) q = q.eq('usccb_code', usccbEl.value);

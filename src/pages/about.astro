@@ -35,9 +35,9 @@ const base = import.meta.env.BASE_URL;
     5-second timeout, and return up to 1,000 rows. A few starting points:
   </p>
   <ul>
-    <li>Counts by USCCB rating: <code>select usccb_code, count(*) from movies where not is_redirect group by 1;</code></li>
+    <li>Counts by USCCB rating: <code>select usccb_code, count(*) from movies group by 1;</code></li>
     <li>Full-text search via the <code>search_tsv</code> column: <code>where search_tsv @@ websearch_to_tsquery('english', '…')</code> rather than <code>like '%…%'</code>.</li>
-    <li>Always add <code>not is_redirect</code> to exclude the 322 "see other title" pointer stubs.</li>
+    <li>The <code>movies</code> table is all real films; the 322 "see other title" alias stubs live in a separate <code>redirects</code> table.</li>
   </ul>
   <p>
     Spotted a film that's missing or mis-rated? You can <a href={`${base}submit`}>suggest one</a> —

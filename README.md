@@ -28,12 +28,14 @@ CI). These are the public anon/publishable values — no secret is needed to bui
 ## How it works
 
 - **Source of truth:** Supabase Postgres (project `vjtavurzjxfjczpvtpdq`). The `movies`
-  table holds one row per film (ids 1–13694), with a generated `search_tsv` tsvector
-  for full-text search. Lookup/relation tables: `usccb_ratings`, `genres`,
-  `movie_genres`; submission/moderation tables exist for later phases.
+  table holds one row per real film (13,371), with a generated `search_tsv` tsvector for
+  full-text search. TMDB enrichment is a 1:1 `movie_tmdb` table; the 322 "see other title"
+  alias stubs are a separate `redirects` table (so `movies` needs no `is_redirect` filter).
+  Plus `usccb_ratings`, `genres`/`movie_genres`, and the submission/moderation tables.
 - **Detail pages (`/film/{slug}`)** are pre-rendered at build time — one static page
-  per non-redirect film (~13,372). `src/lib/db.js` reads Postgres with `supabase-js`
-  (anon key), paginating past PostgREST's 1000-row cap.
+  per non-redirect film (~13,371). `src/lib/db.js` reads Postgres with `supabase-js`
+  (anon key), paginating past PostgREST's 1000-row cap and embedding each film's genres.
+  When a film has TMDB data, the page also shows its poster, genre chips, and a TMDB link.
 - **Browse (`/`)** runs **live in the browser**: full-text `textSearch` on `search_tsv`
   plus USCCB/MPAA/year filters, an A–Z letter bar (on the article-aware `letter` bucket),
   sort, clickable rating chips, and "show more" pagination — all querying Supabase directly
@@ -127,17 +129,32 @@ only for genuinely dynamic features. The 8-phase plan
 | — | Rework: **live** Supabase browse + **server-side** `/query` SQL editor; tighten anon grants (replaced the planned static `films-index.json` browse and the sql.js-httpvfs snapshot) | ✅ done |
 | 4 | Public `/submit` form → Turnstile-verified Edge Function → moderation via Supabase Studio | ✅ done |
 | 5 | Filtering, sorting, shareable URL state, A–Z navigation, clickable rating chips | ✅ done |
-| 6 | TMDB enrichment into Postgres (posters + metadata) | ⬜ next |
-| 7 | Public read-only API (PostgREST view over `public_movies_api`) | ⬜ planned |
+| 6 | TMDB enrichment into Postgres (posters + metadata) | ✅ done (~12.4k films enriched) |
+| — | Schema refactor: 1:1 `movie_tmdb` table + `redirects` table (drop `movies.is_redirect`) | ✅ done |
+| 7 | Public read-only API (PostgREST view over `public_movies_api`) | ⬜ next |
 | 8 | Custom moderator admin SPA (only if Studio proves insufficient) | ⬜ planned |
 
 The live browse/query rework departed from the plan: a GitHub Pages quirk (it gzips
 files and serves *compressed* byte ranges) made the in-browser SQLite range-request
 DB unusable, so browse and `/query` now query Supabase directly instead.
 
-## Optional: TMDB posters (Phase 6, not yet wired)
+## TMDB enrichment (Phase 6)
 
-The `movies` table already has `tmdb_id` / `poster_path` / `overview` columns (nullable,
-unpopulated). `scripts/tmdb_match.py` + `apply_tmdb.py` are the enrichment pipeline.
-When run, detail pages can render posters where `poster_path` is present. The
-`TMDB_API_KEY` stays build/script-time only — never shipped to the client.
+The detail page renders a poster, genre chips, and a TMDB link for any film with a
+`movie_tmdb` row. The enrichment **has been run** (~12.4k films matched). To re-run or
+refresh it (e.g. with `--include-low`), two steps:
+
+```bash
+# 1. Match every film to a TMDB id (needs a free TMDB v3 key/v4 token + `pip install requests`).
+#    Resumable — re-run to resume; writes tmdb_matches.csv with poster_path/overview/genre_ids.
+export TMDB_API_KEY="..."
+python3 scripts/tmdb_match.py --input export/films.json --out tmdb_matches.csv
+
+# 2. Fold the matches into Postgres (movie_tmdb + genres + movie_genres). Service-role key only;
+#    no TMDB key needed. Idempotent. Add --include-low to also apply weak matches.
+node --env-file=.env scripts/apply_tmdb.mjs
+```
+
+After step 2, the next `npm run build` (or a CI redeploy) renders posters/genres. The
+`TMDB_API_KEY` stays script-time only — never shipped to the client. (`scripts/apply_tmdb.py`
+is the older variant that writes the legacy SQLite/exports for the separate export site.)

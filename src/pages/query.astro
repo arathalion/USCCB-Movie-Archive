@@ -4,10 +4,10 @@ import Base from '../layouts/Base.astro';
 // Examples target the Postgres `movies` table (the canonical source). They run
 // server-side via the read-only run_read_only_sql() function.
 const EXAMPLES = [
-  "select usccb_code, count(*) as n from movies where not is_redirect group by usccb_code order by n desc;",
+  "select usccb_code, count(*) as n from movies group by usccb_code order by n desc;",
   "select title, year from movies where usccb_code = 'O' and year between 2000 and 2010 order by year;",
   "select mpaa_rating, count(*) as n from movies where mpaa_rating is not null group by 1 order by n desc;",
-  "select title, year from movies where search_tsv @@ websearch_to_tsquery('english', 'vampire') and not is_redirect order by year;",
+  "select title, year from movies where search_tsv @@ websearch_to_tsquery('english', 'vampire') order by year;",
 ];
 const DEFAULT_QUERY = EXAMPLES[0];
 ---
@@ -44,17 +44,19 @@ const DEFAULT_QUERY = EXAMPLES[0];
       <dt>mpaa_rating</dt><dd>G / PG / PG-13 / R / NC-17 … (nullable, ~42%).</dd>
       <dt>synopsis, full_review</dt><dd>capsule; long review (1,619 films, paragraphs split by blank lines).</dd>
       <dt>letter, source_file</dt><dd>source folder (a–z) and original archive path.</dd>
-      <dt>is_redirect</dt><dd>boolean; true = “see other title” stub (322 rows). Add <code>and not is_redirect</code> to listings.</dd>
-      <dt>tmdb_id, poster_path</dt><dd>TMDB enrichment (nullable until populated).</dd>
     </dl>
+    <p><code>movies</code> holds only real films now; the 322 “see other title” alias stubs live
+      in a separate <code>redirects</code> table, and TMDB data is in <code>movie_tmdb</code> (join on
+      <code>movie_id</code>).</p>
     <p><strong>Full-text search</strong> uses a Postgres <code>tsvector</code> column <code>search_tsv</code>
       (title + synopsis + full_review):</p>
     <pre class="example">select title, year from movies
 where search_tsv @@ websearch_to_tsquery('english', 'redemption')
-  and not is_redirect
 order by year;</pre>
     <p><strong>Other tables:</strong> <code>usccb_ratings</code> (code, label, description, sort_order),
-      <code>genres</code> (id, name), <code>movie_genres</code> (movie_id, genre_id).</p>
+      <code>movie_tmdb</code> (movie_id, tmdb_id, poster_path, overview…),
+      <code>genres</code> (id, name) + <code>movie_genres</code> (movie_id, genre_id),
+      <code>redirects</code> (slug, title, target_title, target_movie_id).</p>
     <p><strong>USCCB legend:</strong> A-I general patronage · A-II adults and adolescents ·
       A-III adults · A-IV adults with reservations · L limited adult audience · O morally offensive.</p>
   </details>
