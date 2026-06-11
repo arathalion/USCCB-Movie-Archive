@@ -1,51 +1,28 @@
 ---
 import Base from '../layouts/Base.astro';
-import { USCCB_ORDER, USCCB_LEGEND } from '../lib/ratings.js';
 
-// Common MPAA values present in the archive (older ratings exist but these cover
-// the bulk; leave "All" to ignore the filter).
-const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
-const CAP = 1000;
+// Examples target the Postgres `movies` table (the canonical source). They run
+// server-side via the read-only run_read_only_sql() function.
+const EXAMPLES = [
+  "select usccb_code, count(*) as n from movies where not is_redirect group by usccb_code order by n desc;",
+  "select title, year from movies where usccb_code = 'O' and year between 2000 and 2010 order by year;",
+  "select mpaa_rating, count(*) as n from movies where mpaa_rating is not null group by 1 order by n desc;",
+  "select title, year from movies where search_tsv @@ websearch_to_tsquery('english', 'vampire') and not is_redirect order by year;",
+];
+const DEFAULT_QUERY = EXAMPLES[0];
 ---
 
-<Base title="Query" description="Search and filter the USCCB movie archive — live, against the database." active="query">
-  <h1>Query the archive</h1>
+<Base title="SQL" description="Run read-only SQL against the USCCB movie archive (Postgres)." active="query">
+  <h1>SQL query</h1>
   <p class="lede">
-    Full-text search and structured filters over all 13,694 reviews, run live against
-    the database. Results are capped at {CAP.toLocaleString()} rows; export what you find as CSV or JSON.
+    Run read-only SQL directly against the live archive database. A single
+    <code>SELECT</code> or <code>WITH</code> only — queries run with a 5-second timeout
+    and return up to 1,000 rows.
   </p>
 
-  <div class="controls">
-    <input
-      type="search"
-      id="q"
-      placeholder="Full-text search — title, synopsis, full review (e.g. vampire, redemption)…"
-      autocomplete="off"
-      spellcheck="false"
-    />
-    <div class="filters">
-      <select id="usccb" aria-label="USCCB rating">
-        <option value="">All USCCB ratings</option>
-        {USCCB_ORDER.map((r) => <option value={r}>{r} — {USCCB_LEGEND[r]}</option>)}
-      </select>
-      <select id="mpaa" aria-label="MPAA rating">
-        <option value="">All MPAA ratings</option>
-        {MPAA.map((m) => <option value={m}>{m}</option>)}
-      </select>
-      <input type="number" id="ymin" class="year-in" placeholder="Year from" aria-label="Year from" />
-      <input type="number" id="ymax" class="year-in" placeholder="Year to" aria-label="Year to" />
-      <select id="sort" aria-label="Sort by">
-        <option value="title:asc">Title (A–Z)</option>
-        <option value="year:desc">Year (newest)</option>
-        <option value="year:asc">Year (oldest)</option>
-        <option value="usccb_code:asc">USCCB rating</option>
-      </select>
-      <label class="chk"><input type="checkbox" id="redirects" /> Include “see other title” stubs</label>
-    </div>
-  </div>
-
+  <textarea id="sql" class="sql-editor" spellcheck="false">{DEFAULT_QUERY}</textarea>
   <div class="toolbar">
-    <button id="run">Run query</button>
+    <button id="run">Run</button>
     <button id="csv" class="secondary" disabled>Download CSV</button>
     <button id="json" class="secondary" disabled>Download JSON</button>
     <span class="note" id="status">Ready.</span>
@@ -53,25 +30,35 @@ const CAP = 1000;
   <div id="error" class="error" hidden></div>
   <div class="results-wrap" id="resultsWrap" hidden><table class="results" id="results"></table></div>
 
+  <h2>Example queries</h2>
+  <p class="note">Click to load into the editor.</p>
+  {EXAMPLES.map((ex) => <pre class="example">{ex}</pre>)}
+
   <details class="schema">
-    <summary>What you can search &amp; filter</summary>
-    <p><strong>Full-text search</strong> matches whole words (with stemming) across the
-      <code>title</code>, <code>synopsis</code>, and <code>full_review</code> text. Supports
-      <code>web search</code> style — quote <code>"exact phrases"</code>, use <code>or</code>, prefix
-      with <code>-</code> to exclude.</p>
-    <p><strong>Filters:</strong> USCCB rating (A-I … O), MPAA rating, and a year range.
-      Redirect stubs (“see other title”) are excluded by default.</p>
+    <summary>Schema &amp; rating reference</summary>
+    <p><strong>Table <code>movies</code></strong> — one row per film (id 1–13694):</p>
+    <dl class="dl-list">
+      <dt>id, slug</dt><dd>integer primary key; <code>slug</code> is the URL key.</dd>
+      <dt>title, year</dt><dd>year is nullable (~3.6%).</dd>
+      <dt>usccb_code</dt><dd>USCCB rating: A-I, A-II, A-III, A-IV, L, O (nullable). FK to <code>usccb_ratings</code>.</dd>
+      <dt>mpaa_rating</dt><dd>G / PG / PG-13 / R / NC-17 … (nullable, ~42%).</dd>
+      <dt>synopsis, full_review</dt><dd>capsule; long review (1,619 films, paragraphs split by blank lines).</dd>
+      <dt>letter, source_file</dt><dd>source folder (a–z) and original archive path.</dd>
+      <dt>is_redirect</dt><dd>boolean; true = “see other title” stub (322 rows). Add <code>and not is_redirect</code> to listings.</dd>
+      <dt>tmdb_id, poster_path</dt><dd>TMDB enrichment (nullable until populated).</dd>
+    </dl>
+    <p><strong>Full-text search</strong> uses a Postgres <code>tsvector</code> column <code>search_tsv</code>
+      (title + synopsis + full_review):</p>
+    <pre class="example">select title, year from movies
+where search_tsv @@ websearch_to_tsquery('english', 'redemption')
+  and not is_redirect
+order by year;</pre>
+    <p><strong>Other tables:</strong> <code>usccb_ratings</code> (code, label, description, sort_order),
+      <code>genres</code> (id, name), <code>movie_genres</code> (movie_id, genre_id).</p>
     <p><strong>USCCB legend:</strong> A-I general patronage · A-II adults and adolescents ·
       A-III adults · A-IV adults with reservations · L limited adult audience · O morally offensive.</p>
   </details>
 </Base>
-
-<style>
-  .controls .filters .year-in { width: 6.5rem; }
-  .chk { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.88rem; color: var(--muted); }
-  table.results td.title-cell a { font-weight: 500; }
-  table.results td.synopsis-cell { max-width: 40ch; color: var(--muted); }
-</style>
 
 <script>
   import { createClient } from '@supabase/supabase-js';
@@ -80,16 +67,9 @@ const CAP = 1000;
     import.meta.env.PUBLIC_SUPABASE_URL,
     import.meta.env.PUBLIC_SUPABASE_ANON_KEY
   );
-  const base = import.meta.env.BASE_URL;
-  const CAP = 1000;
+  const RENDER_CAP = 1000;
 
-  const qEl = document.getElementById('q');
-  const usccbEl = document.getElementById('usccb');
-  const mpaaEl = document.getElementById('mpaa');
-  const yminEl = document.getElementById('ymin');
-  const ymaxEl = document.getElementById('ymax');
-  const sortEl = document.getElementById('sort');
-  const redirectsEl = document.getElementById('redirects');
+  const sqlEl = document.getElementById('sql');
   const runEl = document.getElementById('run');
   const csvEl = document.getElementById('csv');
   const jsonEl = document.getElementById('json');
@@ -98,56 +78,44 @@ const CAP = 1000;
   const wrapEl = document.getElementById('resultsWrap');
   const tableEl = document.getElementById('results');
 
-  const USCCB_TT = {
-    'A-I': 'General patronage', 'A-II': 'Adults and adolescents', 'A-III': 'Adults',
-    'A-IV': 'Adults, with reservations', 'L': 'Limited adult audience', 'O': 'Morally offensive',
-  };
-
   // Review text is untrusted → escape every rendered cell (XSS guard).
   const esc = (s) =>
     String(s ?? '').replace(/[&<>"']/g, (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  const COLS = [
-    { key: 'title', label: 'Title' },
-    { key: 'year', label: 'Year' },
-    { key: 'usccb_code', label: 'USCCB' },
-    { key: 'mpaa_rating', label: 'MPAA' },
-    { key: 'synopsis', label: 'Synopsis' },
-  ];
-
-  let lastRows = [];
-
-  function buildQuery() {
-    let q = supabase.from('movies').select('slug, title, year, usccb_code, mpaa_rating, synopsis');
-    if (!redirectsEl.checked) q = q.eq('is_redirect', false);
-    const text = qEl.value.trim();
-    if (text) q = q.textSearch('search_tsv', text, { type: 'websearch', config: 'english' });
-    if (usccbEl.value) q = q.eq('usccb_code', usccbEl.value);
-    if (mpaaEl.value) q = q.eq('mpaa_rating', mpaaEl.value);
-    if (yminEl.value) q = q.gte('year', Number(yminEl.value));
-    if (ymaxEl.value) q = q.lte('year', Number(ymaxEl.value));
-    const [col, dir] = sortEl.value.split(':');
-    q = q.order(col, { ascending: dir === 'asc', nullsFirst: false });
-    return q.limit(CAP);
+  // Light client-side check for fast feedback; the server enforces the real rules.
+  function clientGuard(raw) {
+    const sql = raw.trim().replace(/;\s*$/, '');
+    if (!sql) throw new Error('Enter a query.');
+    if (sql.includes(';')) throw new Error('Only a single statement is allowed (remove extra ";").');
+    if (!/^\s*(select|with)\b/i.test(sql)) throw new Error('Only SELECT / WITH queries are allowed.');
+    return sql;
   }
+
+  let lastCols = [], lastRows = [];
 
   async function run() {
     errorEl.hidden = true;
+    let sql;
+    try { sql = clientGuard(sqlEl.value); }
+    catch (e) { errorEl.hidden = false; errorEl.textContent = e.message; return; }
+
     runEl.disabled = true;
     csvEl.disabled = jsonEl.disabled = true;
     statusEl.textContent = 'Running…';
     const t0 = performance.now();
     try {
-      const { data, error } = await buildQuery();
-      if (error) throw error;
+      const { data, error } = await supabase.rpc('run_read_only_sql', { query: sql });
+      if (error) throw new Error(error.message);
+      const rows = data || [];
       const ms = Math.round(performance.now() - t0);
-      lastRows = data;
-      renderTable(data);
+      lastRows = rows;
+      lastCols = rows.length ? Object.keys(rows[0]) : [];
+      renderTable(lastCols, rows);
       statusEl.textContent =
-        `${data.length.toLocaleString()} row${data.length === 1 ? '' : 's'} in ${ms} ms` +
-        (data.length >= CAP ? ` (capped at ${CAP.toLocaleString()})` : '');
-      csvEl.disabled = jsonEl.disabled = data.length === 0;
+        `${rows.length.toLocaleString()} row${rows.length === 1 ? '' : 's'} in ${ms} ms` +
+        (rows.length >= RENDER_CAP ? ` (capped at ${RENDER_CAP.toLocaleString()})` : '');
+      csvEl.disabled = jsonEl.disabled = rows.length === 0;
     } catch (e) {
       errorEl.hidden = false;
       errorEl.textContent = e && e.message ? e.message : String(e);
@@ -157,30 +125,22 @@ const CAP = 1000;
     }
   }
 
-  function renderTable(rows) {
+  function renderTable(cols, rows) {
     wrapEl.hidden = false;
     if (!rows.length) { tableEl.innerHTML = '<tr><td>No rows.</td></tr>'; return; }
-    const head = '<thead><tr>' + COLS.map((c) => `<th>${esc(c.label)}</th>`).join('') + '</tr></thead>';
-    const body = rows.map((r) => {
-      const cells = [
-        `<td class="title-cell"><a href="${base}film/${esc(r.slug)}">${esc(r.title)}</a></td>`,
-        `<td>${r.year ?? '—'}</td>`,
-        `<td>${r.usccb_code ? `<span class="chip usccb" title="${esc(USCCB_TT[r.usccb_code] || '')}">${esc(r.usccb_code)}</span>` : ''}</td>`,
-        `<td>${r.mpaa_rating ? `<span class="chip">${esc(r.mpaa_rating)}</span>` : ''}</td>`,
-        `<td class="synopsis-cell">${esc(r.synopsis)}</td>`,
-      ];
-      return '<tr>' + cells.join('') + '</tr>';
-    }).join('');
+    const head = '<thead><tr>' + cols.map((c) => `<th>${esc(c)}</th>`).join('') + '</tr></thead>';
+    const body = rows.map((r) =>
+      '<tr>' + cols.map((c) => `<td>${esc(r[c])}</td>`).join('') + '</tr>'
+    ).join('');
     tableEl.innerHTML = head + '<tbody>' + body + '</tbody>';
   }
 
-  function toCSV(rows) {
+  function toCSV(cols, rows) {
     const cell = (v) => {
-      const s = v == null ? '' : String(v);
+      const s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
       return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     };
-    const keys = COLS.map((c) => c.key);
-    return [keys.join(','), ...rows.map((r) => keys.map((k) => cell(r[k])).join(','))].join('\n');
+    return [cols.join(','), ...rows.map((r) => cols.map((c) => cell(r[c])).join(','))].join('\n');
   }
   function download(name, text, type) {
     const blob = new Blob([text], { type });
@@ -192,11 +152,14 @@ const CAP = 1000;
   }
 
   runEl.addEventListener('click', run);
-  qEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); } });
-  [usccbEl, mpaaEl, sortEl].forEach((el) => el.addEventListener('change', run));
-  csvEl.addEventListener('click', () => download('query.csv', toCSV(lastRows), 'text/csv'));
+  sqlEl.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); run(); }
+  });
+  csvEl.addEventListener('click', () => download('query.csv', toCSV(lastCols, lastRows), 'text/csv'));
   jsonEl.addEventListener('click', () => download('query.json', JSON.stringify(lastRows, null, 2), 'application/json'));
+  document.querySelectorAll('pre.example').forEach((pre) =>
+    pre.addEventListener('click', () => { sqlEl.value = pre.textContent.trim(); sqlEl.focus(); })
+  );
 
-  // Run once on load so visitors see results immediately.
   run();
 </script>

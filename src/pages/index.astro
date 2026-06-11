@@ -1,20 +1,22 @@
 ---
 import Base from '../layouts/Base.astro';
 import { USCCB_ORDER, USCCB_LEGEND } from '../lib/ratings.js';
+
+const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
 ---
 
-<Base title="Browse" description="Browse 13,694 USCCB / Catholic News Service movie reviews (1905–2011)." active="browse">
+<Base title="Browse" description="Search and filter 13,694 USCCB / Catholic News Service movie reviews (1905–2011)." active="browse">
   <h1>Browse the archive</h1>
   <p class="lede">
     13,694 film reviews from the USCCB Office for Film &amp; Broadcasting / Catholic
-    News Service, 1905–2011. Search by title, or filter by rating and decade.
+    News Service, 1905–2011. Full-text search across reviews, filter by rating and year, sort any way.
   </p>
 
   <div class="controls">
     <input
       type="search"
       id="q"
-      placeholder="Search titles (e.g. casino, war of the roses)…"
+      placeholder="Search titles &amp; reviews (e.g. vampire, redemption)…"
       autocomplete="off"
       spellcheck="false"
     />
@@ -25,127 +27,118 @@ import { USCCB_ORDER, USCCB_LEGEND } from '../lib/ratings.js';
       </select>
       <select id="mpaa" aria-label="MPAA rating">
         <option value="">All MPAA ratings</option>
+        {MPAA.map((m) => <option value={m}>{m}</option>)}
       </select>
-      <select id="decade" aria-label="Decade">
-        <option value="">All decades</option>
+      <input type="number" id="ymin" class="year-in" placeholder="Year from" aria-label="Year from" />
+      <input type="number" id="ymax" class="year-in" placeholder="Year to" aria-label="Year to" />
+      <select id="sort" aria-label="Sort by">
+        <option value="title:asc">Title (A–Z)</option>
+        <option value="year:desc">Year (newest)</option>
+        <option value="year:asc">Year (oldest)</option>
+        <option value="usccb_code:asc">USCCB rating</option>
       </select>
     </div>
   </div>
 
-  <p class="count" id="count">Loading index…</p>
+  <p class="count" id="count">Loading…</p>
   <ul class="films" id="films"></ul>
   <div class="center">
     <button id="more" class="secondary" hidden>Show more</button>
   </div>
-
-  <script>
-    const base = import.meta.env.BASE_URL;
-    const PAGE = 300;
-
-    const ARTICLES = ['the','a','an','la','le','les','il','lo','el','las','los','der','die','das',"l'",'un','une'];
-    // "War of the Roses, The" -> "the war of the roses"
-    function frontForm(title) {
-      const m = title.match(/^(.*),\s*([A-Za-z']+)\.?$/);
-      if (m && ARTICLES.includes(m[2].toLowerCase())) {
-        const art = m[2];
-        const sep = art.endsWith("'") ? '' : ' ';
-        return (art + sep + m[1]).trim();
-      }
-      return title;
-    }
-    const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    const esc = (s) =>
-      String(s ?? '').replace(/[&<>"']/g, (c) =>
-        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
-      );
-
-    const qEl = document.getElementById('q');
-    const usccbEl = document.getElementById('usccb');
-    const mpaaEl = document.getElementById('mpaa');
-    const decadeEl = document.getElementById('decade');
-    const countEl = document.getElementById('count');
-    const listEl = document.getElementById('films');
-    const moreEl = document.getElementById('more');
-
-    let films = [];        // [id, slug, title, year, usccb, mpaa]
-    let searchKeys = [];    // precomputed normalized "title + frontForm"
-    let filtered = [];
-    let shown = 0;
-
-    function render(reset) {
-      if (reset) { listEl.innerHTML = ''; shown = 0; }
-      const next = filtered.slice(shown, shown + PAGE);
-      const html = next
-        .map((f) => {
-          const [, slug, title, year, usccb, mpaa] = f;
-          const chips =
-            (usccb ? `<span class="chip usccb" title="${esc(USCCB_TT[usccb] || '')}">${esc(usccb)}</span>` : '') +
-            (mpaa ? `<span class="chip">${esc(mpaa)}</span>` : '');
-          return `<li><span class="title"><a href="${base}film/${esc(slug)}">${esc(title)}</a></span>` +
-            `<span class="chip-row">${chips}</span>` +
-            `<span class="year">${year ?? '—'}</span></li>`;
-        })
-        .join('');
-      listEl.insertAdjacentHTML('beforeend', html);
-      shown += next.length;
-      moreEl.hidden = shown >= filtered.length;
-      countEl.textContent =
-        `${filtered.length.toLocaleString()} film${filtered.length === 1 ? '' : 's'}` +
-        (filtered.length > shown ? ` — showing ${shown.toLocaleString()}` : '');
-    }
-
-    const USCCB_TT = {
-      'A-I': 'General patronage', 'A-II': 'Adults and adolescents', 'A-III': 'Adults',
-      'A-IV': 'Adults, with reservations', 'L': 'Limited adult audience', 'O': 'Morally offensive',
-    };
-
-    function apply() {
-      const q = norm(qEl.value);
-      const u = usccbEl.value, m = mpaaEl.value, d = decadeEl.value;
-      const dmin = d ? +d : null;
-      filtered = films.filter((f, i) => {
-        if (u && f[4] !== u) return false;
-        if (m && f[5] !== m) return false;
-        if (d) { const y = f[3]; if (y == null || y < dmin || y > dmin + 9) return false; }
-        if (q && !searchKeys[i].includes(q)) return false;
-        return true;
-      });
-      render(true);
-    }
-
-    fetch(base + 'films-index.json')
-      .then((r) => r.json())
-      .then((data) => {
-        films = data;
-        searchKeys = films.map((f) => norm(f[2]) + ' ' + norm(frontForm(f[2])));
-        // Populate MPAA + decade options from the data.
-        const mpaaSet = new Set(), decadeSet = new Set();
-        for (const f of films) {
-          if (f[5]) mpaaSet.add(f[5]);
-          if (f[3] != null) decadeSet.add(Math.floor(f[3] / 10) * 10);
-        }
-        const mpaaOrder = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
-        [...mpaaSet]
-          .sort((a, b) => {
-            const ia = mpaaOrder.indexOf(a), ib = mpaaOrder.indexOf(b);
-            return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
-          })
-          .forEach((v) => mpaaEl.add(new Option(v, v)));
-        [...decadeSet]
-          .sort((a, b) => a - b)
-          .forEach((v) => decadeEl.add(new Option(`${v}s`, v)));
-        apply();
-      })
-      .catch((e) => {
-        countEl.textContent = 'Failed to load the film index.';
-        console.error(e);
-      });
-
-    let t;
-    qEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(apply, 120); });
-    usccbEl.addEventListener('change', apply);
-    mpaaEl.addEventListener('change', apply);
-    decadeEl.addEventListener('change', apply);
-    moreEl.addEventListener('click', () => render(false));
-  </script>
 </Base>
+
+<style>
+  .controls .filters .year-in { width: 6.5rem; }
+</style>
+
+<script>
+  import { createClient } from '@supabase/supabase-js';
+
+  const supabase = createClient(
+    import.meta.env.PUBLIC_SUPABASE_URL,
+    import.meta.env.PUBLIC_SUPABASE_ANON_KEY
+  );
+  const base = import.meta.env.BASE_URL;
+  const PAGE = 100;
+
+  const USCCB_TT = {
+    'A-I': 'General patronage', 'A-II': 'Adults and adolescents', 'A-III': 'Adults',
+    'A-IV': 'Adults, with reservations', 'L': 'Limited adult audience', 'O': 'Morally offensive',
+  };
+
+  const esc = (s) =>
+    String(s ?? '').replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  const qEl = document.getElementById('q');
+  const usccbEl = document.getElementById('usccb');
+  const mpaaEl = document.getElementById('mpaa');
+  const yminEl = document.getElementById('ymin');
+  const ymaxEl = document.getElementById('ymax');
+  const sortEl = document.getElementById('sort');
+  const countEl = document.getElementById('count');
+  const listEl = document.getElementById('films');
+  const moreEl = document.getElementById('more');
+
+  let offset = 0, total = 0, loading = false;
+
+  function buildQuery() {
+    let q = supabase
+      .from('movies')
+      .select('slug, title, year, usccb_code, mpaa_rating', { count: 'exact' })
+      .eq('is_redirect', false);
+    const text = qEl.value.trim();
+    if (text) q = q.textSearch('search_tsv', text, { type: 'websearch', config: 'english' });
+    if (usccbEl.value) q = q.eq('usccb_code', usccbEl.value);
+    if (mpaaEl.value) q = q.eq('mpaa_rating', mpaaEl.value);
+    if (yminEl.value) q = q.gte('year', Number(yminEl.value));
+    if (ymaxEl.value) q = q.lte('year', Number(ymaxEl.value));
+    const [col, dir] = sortEl.value.split(':');
+    q = q.order(col, { ascending: dir === 'asc', nullsFirst: false });
+    if (col !== 'title') q = q.order('title', { ascending: true }); // stable secondary sort
+    return q;
+  }
+
+  function rowHtml(f) {
+    const chips =
+      (f.usccb_code ? `<span class="chip usccb" title="${esc(USCCB_TT[f.usccb_code] || '')}">${esc(f.usccb_code)}</span>` : '') +
+      (f.mpaa_rating ? `<span class="chip">${esc(f.mpaa_rating)}</span>` : '');
+    return `<li><span class="title"><a href="${base}film/${esc(f.slug)}">${esc(f.title)}</a></span>` +
+      `<span class="chip-row">${chips}</span>` +
+      `<span class="year">${f.year ?? '—'}</span></li>`;
+  }
+
+  async function load(reset) {
+    if (loading) return;
+    loading = true;
+    if (reset) { offset = 0; listEl.innerHTML = ''; countEl.textContent = 'Searching…'; }
+    try {
+      const { data, count, error } = await buildQuery().range(offset, offset + PAGE - 1);
+      if (error) throw error;
+      if (count != null) total = count;
+      listEl.insertAdjacentHTML('beforeend', data.map(rowHtml).join(''));
+      offset += data.length;
+      moreEl.hidden = offset >= total;
+      countEl.textContent =
+        `${total.toLocaleString()} film${total === 1 ? '' : 's'}` +
+        (offset < total ? ` — showing ${offset.toLocaleString()}` : '');
+    } catch (e) {
+      countEl.textContent = 'Search failed.';
+      console.error(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  let t;
+  const debounced = () => { clearTimeout(t); t = setTimeout(() => load(true), 200); };
+  qEl.addEventListener('input', debounced);
+  yminEl.addEventListener('input', debounced);
+  ymaxEl.addEventListener('input', debounced);
+  usccbEl.addEventListener('change', () => load(true));
+  mpaaEl.addEventListener('change', () => load(true));
+  sortEl.addEventListener('change', () => load(true));
+  moreEl.addEventListener('click', () => load(false));
+
+  load(true);
+</script>

@@ -44,21 +44,6 @@ async function fetchAllMovies(columns) {
   return out;
 }
 
-// SQLite's COLLATE NOCASE folds only ASCII A–Z; uppercasing is the closest match.
-// Tie-break by id for a stable order (mirrors the old rowid tie-break).
-const byTitleNocase = (a, b) => {
-  const A = (a.title || '').toUpperCase();
-  const B = (b.title || '').toUpperCase();
-  return A < B ? -1 : A > B ? 1 : a.id - b.id;
-};
-
-// Compact rows for the browse index: [id, slug, title, year, usccb, mpaa].
-export async function getFilmsIndex() {
-  const rows = await fetchAllMovies('id, slug, title, year, usccb_code, mpaa_rating');
-  rows.sort(byTitleNocase);
-  return rows.map((r) => [r.id, r.slug, r.title, r.year, r.usccb_code, r.mpaa_rating]);
-}
-
 // Full detail rows for static page generation (one page per non-redirect film).
 // poster_path / tmdb_id are selected ahead of Phase 6 (null until enrichment runs).
 export async function getFilmsForDetail() {
