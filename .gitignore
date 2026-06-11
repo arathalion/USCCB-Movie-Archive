@@ -22,6 +22,10 @@ public/downloads/
 public/movies_web.db
 export/films_full.csv
 
+# TMDB match output (scripts/tmdb_match.py) — reproducible from the API and large;
+# the enrichment it feeds lives in Postgres (movie_tmdb), the source of truth.
+tmdb_matches.csv
+
 # Raw source archive (167 MB of original .shtml pages, a–z). This is the
 # provenance for movies_web.db but is NOT used by the site or the build, so it
 # is kept out of the deploy repo to keep clones and CI checkouts fast.

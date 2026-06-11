@@ -21,18 +21,39 @@ const paragraphs = film.full_review
   ? String(film.full_review).split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)
   : [];
 const desc = (film.synopsis || '').slice(0, 160);
+const genres = film.genres ?? [];
+const posterUrl = film.poster_path ? `https://image.tmdb.org/t/p/w342${film.poster_path}` : null;
+const tmdbUrl = film.tmdb_id ? `https://www.themoviedb.org/movie/${film.tmdb_id}` : null;
 ---
 
 <Base title={film.title} description={desc} active="browse">
   <p class="backlink"><a href={base}>← Back to browse</a></p>
-  <h1>{film.title}</h1>
-  <p class="meta">
-    {film.year ?? 'Year unknown'}
-    <span class="chip-row" style="display:inline-flex; margin-left:0.6rem;">
-      {usccb && <span class="chip usccb" title={USCCB_LEGEND[usccb] ?? ''}>{usccb}</span>}
-      {film.mpaa_rating && <span class="chip">{film.mpaa_rating}</span>}
-    </span>
-  </p>
+
+  <div class="film-head">
+    <div class="film-head-main">
+      <h1>{film.title}</h1>
+      <p class="meta">
+        {film.year ?? 'Year unknown'}
+        <span class="chip-row" style="display:inline-flex; margin-left:0.6rem;">
+          {usccb && <span class="chip usccb" title={USCCB_LEGEND[usccb] ?? ''}>{usccb}</span>}
+          {film.mpaa_rating && <span class="chip">{film.mpaa_rating}</span>}
+        </span>
+      </p>
+      {genres.length > 0 && (
+        <p class="chip-row genres">{genres.map((g) => <span class="chip">{g}</span>)}</p>
+      )}
+    </div>
+    {posterUrl && (
+      <img
+        class="poster"
+        src={posterUrl}
+        alt={`Poster for ${film.title}`}
+        loading="lazy"
+        width="171"
+        height="257"
+      />
+    )}
+  </div>
 
   {film.synopsis && <p class="synopsis">{film.synopsis}</p>}
 
@@ -48,4 +69,30 @@ const desc = (film.synopsis || '').slice(0, 160);
       USCCB rating <strong>{usccb}</strong>: {USCCB_LEGEND[usccb]}.
     </p>
   )}
+
+  {tmdbUrl && (
+    <p class="note">
+      Poster and genre data from <a href={tmdbUrl} target="_blank" rel="noopener">The Movie Database ↗</a>.
+    </p>
+  )}
 </Base>
+
+<style>
+  .film-head { display: flex; gap: 1.25rem; align-items: flex-start; }
+  .film-head-main { flex: 1; min-width: 0; }
+  .film-head h1 { margin-top: 0; }
+  .genres { margin: 0.5rem 0 0; }
+  .poster {
+    flex-shrink: 0;
+    width: 171px;
+    height: auto;
+    aspect-ratio: 2 / 3;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+  }
+  @media (max-width: 32rem) {
+    .film-head { flex-direction: column-reverse; align-items: stretch; }
+    .poster { width: 130px; }
+  }
+</style>

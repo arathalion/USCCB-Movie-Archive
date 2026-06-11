@@ -26,15 +26,15 @@ const supabase = createClient(url, key, { auth: { persistSession: false } });
 
 const PAGE = 1000; // PostgREST caps each response at 1000 rows
 
-// Fetch every non-redirect movie row for the given columns, paginating by id (a
-// stable unique key) so the range windows can't skip or duplicate across ties.
+// Fetch every movie row for the given columns, paginating by id (a stable unique
+// key) so the range windows can't skip or duplicate across ties. (Redirect stubs
+// live in their own `redirects` table now, so `movies` is all real films.)
 async function fetchAllMovies(columns) {
   const out = [];
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from('movies')
       .select(columns)
-      .eq('is_redirect', false)
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) throw new Error(`Supabase read failed: ${error.message}`);
@@ -45,9 +45,22 @@ async function fetchAllMovies(columns) {
 }
 
 // Full detail rows for static page generation (one page per non-redirect film).
-// poster_path / tmdb_id are selected ahead of Phase 6 (null until enrichment runs).
+// TMDB fields (poster_path, tmdb_id, overview) and embedded genres are null/empty
+// until the Phase 6 enrichment (scripts/apply_tmdb.mjs) has run.
 export async function getFilmsForDetail() {
-  return fetchAllMovies(
-    'id, slug, title, year, usccb_code, mpaa_rating, synopsis, full_review, poster_path, tmdb_id'
+  const rows = await fetchAllMovies(
+    'id, slug, title, year, usccb_code, mpaa_rating, synopsis, full_review, ' +
+      'movie_tmdb(tmdb_id, poster_path, overview), movie_genres(genres(name))'
   );
+  // Flatten the 1:1 movie_tmdb child and the embedded genres into plain fields.
+  return rows.map(({ movie_tmdb, movie_genres, ...film }) => {
+    const tmdb = Array.isArray(movie_tmdb) ? movie_tmdb[0] : movie_tmdb;
+    return {
+      ...film,
+      tmdb_id: tmdb?.tmdb_id ?? null,
+      poster_path: tmdb?.poster_path ?? null,
+      overview: tmdb?.overview ?? null,
+      genres: (movie_genres || []).map((mg) => mg.genres?.name).filter(Boolean).sort(),
+    };
+  });
 }

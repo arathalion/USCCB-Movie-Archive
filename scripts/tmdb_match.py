@@ -33,7 +33,11 @@ Output columns (tmdb_matches.csv)
 ---------------------------------
     id, slug, usccb_title, usccb_year,
     tmdb_id, tmdb_title, tmdb_year, tmdb_release_date,
-    score, status
+    score, status, poster_path, overview, genre_ids
+
+  poster_path / overview / genre_ids come straight from the TMDB search hit (no
+  extra requests). genre_ids is ';'-joined TMDB genre ids. These feed
+  scripts/apply_tmdb.mjs, which writes them into Postgres.
 
   status is one of:
     matched          - confident match (score >= --min-score and year within tolerance)
@@ -170,7 +174,8 @@ def main():
     w = csv.writer(fh)
     if write_header:
         w.writerow(["id","slug","usccb_title","usccb_year","tmdb_id","tmdb_title",
-                    "tmdb_year","tmdb_release_date","score","status"])
+                    "tmdb_year","tmdb_release_date","score","status",
+                    "poster_path","overview","genre_ids"])
 
     stats = {"matched":0,"low_confidence":0,"no_result":0,"skipped":0}
     total = len(films)
@@ -181,7 +186,7 @@ def main():
             continue
         if args.skip_redirects and film.get("is_redirect"):
             w.writerow([fid, film["slug"], film.get("title",""), film.get("year",""),
-                        "", "", "", "", "", "skipped_redirect"])
+                        "", "", "", "", "", "skipped_redirect", "", "", ""])
             stats["skipped"] += 1; continue
 
         title = film.get("title") or ""
@@ -191,16 +196,18 @@ def main():
             results = tmdb_search(session, base_params, title, None)
 
         if not results:
-            w.writerow([fid, film["slug"], title, yr or "", "", "", "", "", "", "no_result"])
+            w.writerow([fid, film["slug"], title, yr or "", "", "", "", "", "", "no_result", "", "", ""])
             stats["no_result"] += 1
         else:
             best, score = best_match(title, yr, results)
             by = year_of(best)
             year_ok = (not yr) or (by and abs(yr - by) <= args.year_tolerance)
             status = "matched" if (score >= args.min_score and year_ok) else "low_confidence"
+            genre_ids = ";".join(str(g) for g in (best.get("genre_ids") or []))
             w.writerow([fid, film["slug"], title, yr or "",
                         best.get("id"), best.get("title"), by or "",
-                        best.get("release_date",""), score, status])
+                        best.get("release_date",""), score, status,
+                        best.get("poster_path") or "", best.get("overview") or "", genre_ids])
             stats[status] += 1
 
         processed += 1
