@@ -61,9 +61,10 @@ const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
 
   .az-bar { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0 0 1rem; }
   .az-bar .az {
-    flex: 1 1 0; background: #fff; color: var(--ink); border: 1px solid var(--line);
+    flex: 1 1 0; display: flex; align-items: center; justify-content: center;
+    background: #fff; color: var(--ink); border: 1px solid var(--line);
     padding: 0.2rem 0.4rem; font-size: 0.8rem; border-radius: 4px;
-    min-width: 1.6rem; text-transform: uppercase; text-align: center;
+    min-width: 1.6rem; text-transform: uppercase;
   }
   .az-bar .az:hover { background: var(--code-bg); }
   .az-bar .az.active { background: var(--ink); color: #fff; border-color: var(--ink); }
