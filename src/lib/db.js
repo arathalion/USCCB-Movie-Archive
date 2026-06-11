@@ -44,6 +44,16 @@ async function fetchAllMovies(columns) {
   return out;
 }
 
+// Distinct genre names (for the browse-page genre filter), alphabetised.
+export async function getGenres() {
+  const { data, error } = await supabase
+    .from('genres')
+    .select('name')
+    .order('name', { ascending: true });
+  if (error) throw new Error(`Supabase read failed: ${error.message}`);
+  return data.map((g) => g.name);
+}
+
 // Full detail rows for static page generation (one page per non-redirect film).
 // TMDB fields (poster_path, tmdb_id, overview) and embedded genres are null/empty
 // until the Phase 6 enrichment (scripts/apply_tmdb.mjs) has run.

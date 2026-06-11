@@ -1,16 +1,18 @@
 ---
 import Base from '../layouts/Base.astro';
 import { USCCB_ORDER, USCCB_LEGEND } from '../lib/ratings.js';
+import { getGenres } from '../lib/db.js';
 
 const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
+const GENRES = await getGenres();
 ---
 
-<Base title="Browse" description="Search and filter 13,371 USCCB / Catholic News Service movie reviews (1905–2011)." active="browse">
+<Base title="Browse" description="Search and filter 13,205 USCCB / Catholic News Service movie reviews (1905–2011)." active="browse">
   <h1>Browse the archive</h1>
   <p class="lede">
-    13,371 film reviews from the USCCB Office for Film &amp; Broadcasting / Catholic
-    News Service, 1905–2011. Full-text search across reviews, filter by rating and year, sort any way.
+    13,205 film reviews from the USCCB Office for Film &amp; Broadcasting / Catholic
+    News Service, 1905–2011. Full-text search across reviews, filter by rating, genre, and year, sort any way.
   </p>
 
   <div class="controls">
@@ -29,6 +31,10 @@ const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
       <select id="mpaa" aria-label="MPAA rating">
         <option value="">All MPAA ratings</option>
         {MPAA.map((m) => <option value={m}>{m}</option>)}
+      </select>
+      <select id="genre" aria-label="Genre">
+        <option value="">All genres</option>
+        {GENRES.map((g) => <option value={g}>{g}</option>)}
       </select>
       <input type="number" id="ymin" class="year-in" placeholder="Year from" aria-label="Year from" />
       <input type="number" id="ymax" class="year-in" placeholder="Year to" aria-label="Year to" />
@@ -101,6 +107,7 @@ const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
   const qEl = document.getElementById('q');
   const usccbEl = document.getElementById('usccb');
   const mpaaEl = document.getElementById('mpaa');
+  const genreEl = document.getElementById('genre');
   const yminEl = document.getElementById('ymin');
   const ymaxEl = document.getElementById('ymax');
   const sortEl = document.getElementById('sort');
@@ -114,18 +121,21 @@ const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
   let letter = '';
 
   function hasFilters() {
-    return !!(qEl.value.trim() || usccbEl.value || mpaaEl.value || letter ||
+    return !!(qEl.value.trim() || usccbEl.value || mpaaEl.value || genreEl.value || letter ||
       yminEl.value || ymaxEl.value || sortEl.value !== DEFAULT_SORT);
   }
 
   function buildQuery() {
-    let q = supabase
-      .from('movies')
-      .select('slug, title, year, usccb_code, mpaa_rating', { count: 'exact' });
+    // Genre lives in movie_genres → genres (M2M); filter via an inner-join embed,
+    // added only when a genre is picked so films without genres aren't excluded.
+    const cols = 'slug, title, year, usccb_code, mpaa_rating' +
+      (genreEl.value ? ', movie_genres!inner(genres!inner(name))' : '');
+    let q = supabase.from('movies').select(cols, { count: 'exact' });
     const text = qEl.value.trim();
     if (text) q = q.textSearch('search_tsv', text, { type: 'websearch', config: 'english' });
     if (usccbEl.value) q = q.eq('usccb_code', usccbEl.value);
     if (mpaaEl.value) q = q.eq('mpaa_rating', mpaaEl.value);
+    if (genreEl.value) q = q.eq('movie_genres.genres.name', genreEl.value);
     if (letter) q = q.eq('letter', letter);
     if (yminEl.value) q = q.gte('year', Number(yminEl.value));
     if (ymaxEl.value) q = q.lte('year', Number(ymaxEl.value));
@@ -141,6 +151,7 @@ const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
     if (qEl.value.trim()) p.set('q', qEl.value.trim());
     if (usccbEl.value) p.set('usccb', usccbEl.value);
     if (mpaaEl.value) p.set('mpaa', mpaaEl.value);
+    if (genreEl.value) p.set('genre', genreEl.value);
     if (letter) p.set('letter', letter);
     if (yminEl.value) p.set('ymin', yminEl.value);
     if (ymaxEl.value) p.set('ymax', ymaxEl.value);
@@ -154,6 +165,7 @@ const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
     qEl.value = p.get('q') || '';
     usccbEl.value = p.get('usccb') || '';
     mpaaEl.value = p.get('mpaa') || '';
+    genreEl.value = p.get('genre') || '';
     yminEl.value = p.get('ymin') || '';
     ymaxEl.value = p.get('ymax') || '';
     const s = p.get('sort') || DEFAULT_SORT;
@@ -237,7 +249,7 @@ const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
 
   // ---- Clear all filters ----
   resetEl.addEventListener('click', () => {
-    qEl.value = usccbEl.value = mpaaEl.value = yminEl.value = ymaxEl.value = '';
+    qEl.value = usccbEl.value = mpaaEl.value = genreEl.value = yminEl.value = ymaxEl.value = '';
     sortEl.value = DEFAULT_SORT;
     letter = '';
     updateAz();
@@ -251,6 +263,7 @@ const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
   ymaxEl.addEventListener('input', debounced);
   usccbEl.addEventListener('change', () => load(true));
   mpaaEl.addEventListener('change', () => load(true));
+  genreEl.addEventListener('change', () => load(true));
   sortEl.addEventListener('change', () => load(true));
   moreEl.addEventListener('click', () => load(false));
   window.addEventListener('popstate', () => { readUrl(); load(true); });
