@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An **Astro site deployed to GitHub Pages** for an archive of **13,694 USCCB / Catholic News Service movie reviews** (coverage **1905–2011**). `WEBSITE_BUILD_SPEC.md` is the original spec; `README.md` documents the as-built site. **Supabase Postgres is the single source of truth** — static pages and the SQLite/CSV exports all derive from it.
+An **Astro site deployed to GitHub Pages** for an archive of **13,371 USCCB / Catholic News Service movie reviews** (coverage **1905–2011**). `WEBSITE_BUILD_SPEC.md` is the original spec; `README.md` documents the as-built site. **Supabase Postgres is the single source of truth** — static pages and the SQLite/CSV exports all derive from it.
 
 The site began as a fully static SQLite-in-browser build and is migrating to Supabase over an 8-phase plan (`~/.claude/plans/quirky-jumping-phoenix.md`). **Phases 1–6 are done (TMDB enrichment applied: ~12.4k films with posters/genres in `movie_tmdb`), plus a live-browse/`/query` rework and a schema refactor (`movie_tmdb` 1:1 split + `redirects` table); phases 7–8 are planned.** See the phase table in `README.md`. Work the migration **in auto mode but pause between phases** — implement one, report, wait for the user before the next.
 

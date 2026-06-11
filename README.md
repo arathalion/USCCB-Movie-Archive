@@ -1,6 +1,6 @@
 # USCCB Movie Reviews Archive
 
-An archive of **13,694 USCCB / Catholic News Service movie reviews** (coverage
+An archive of **13,371 USCCB / Catholic News Service movie reviews** (coverage
 **1905–2011**). The public site is built with **Astro** and deployed to **GitHub
 Pages**; the data lives in **Supabase Postgres**, which is the single source of
 truth. Detail pages are pre-rendered at build time from Postgres, while browse and
@@ -124,7 +124,7 @@ only for genuinely dynamic features. The 8-phase plan
 | Phase | What | Status |
 |---|---|---|
 | 1 | Stabilize the static baseline (rollback point) | ✅ done |
-| 2 | Supabase schema + import 13,694 rows; swap the build to read Postgres | ✅ done |
+| 2 | Supabase schema + import 13,693 rows; swap the build to read Postgres | ✅ done |
 | 3 | Regenerate the SQLite + CSV exports **from** Postgres in `prebuild` | ✅ done |
 | — | Rework: **live** Supabase browse + **server-side** `/query` SQL editor; tighten anon grants (replaced the planned static `films-index.json` browse and the sql.js-httpvfs snapshot) | ✅ done |
 | 4 | Public `/submit` form → Turnstile-verified Edge Function → moderation via Supabase Studio | ✅ done |
