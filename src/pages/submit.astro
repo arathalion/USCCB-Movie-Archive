@@ -1,0 +1,184 @@
+---
+import Base from '../layouts/Base.astro';
+import { USCCB_ORDER, USCCB_LEGEND } from '../lib/ratings.js';
+
+const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17', 'Not Rated'];
+// Cloudflare Turnstile site key. Defaults to Cloudflare's "always passes" TEST
+// key so the form works before a real Turnstile widget is configured. Set
+// PUBLIC_TURNSTILE_SITE_KEY (env / repo secret) to the real key for production.
+const SITE_KEY = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY || '1x00000000000000000000AA';
+---
+
+<Base
+  title="Submit a film"
+  description="Suggest a film for the USCCB / Catholic News Service review archive."
+  active="submit"
+>
+  <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+
+  <h1>Suggest a film</h1>
+  <p class="lede">
+    Know a USCCB / Catholic News Service review that's missing or wrong? Send it here.
+    Submissions are reviewed by a moderator before anything is added — nothing you enter
+    appears on the site automatically.
+  </p>
+
+  <form id="submit-form" class="submit-form" novalidate>
+    <div class="field">
+      <label for="title">Film title <span class="req">*</span></label>
+      <input type="text" id="title" name="title" maxlength="300" required autocomplete="off" />
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <label for="year">Year</label>
+        <input type="number" id="year" name="year" min="1880" max="2030" placeholder="e.g. 1998" />
+      </div>
+      <div class="field">
+        <label for="usccb_code">Suggested USCCB rating</label>
+        <select id="usccb_code" name="usccb_code">
+          <option value="">— none —</option>
+          {USCCB_ORDER.map((r) => <option value={r}>{r} — {USCCB_LEGEND[r]}</option>)}
+        </select>
+      </div>
+      <div class="field">
+        <label for="mpaa_rating">MPAA rating</label>
+        <select id="mpaa_rating" name="mpaa_rating">
+          <option value="">— none —</option>
+          {MPAA.map((m) => <option value={m}>{m}</option>)}
+        </select>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="explanation">Notes / justification</label>
+      <textarea id="explanation" name="explanation" maxlength="5000" rows="5"
+        placeholder="What's the review, where did you see it, why this rating?"></textarea>
+    </div>
+
+    <div class="field">
+      <label for="source_url">Source URL</label>
+      <input type="url" id="source_url" name="source_url" maxlength="2000"
+        placeholder="https://…" />
+    </div>
+
+    <div class="field">
+      <label for="submitter_name">Your name <span class="opt">(optional)</span></label>
+      <input type="text" id="submitter_name" name="submitter_name" maxlength="120" autocomplete="off" />
+      <p class="note">Optional — no email is collected.</p>
+    </div>
+
+    <div class="cf-turnstile" data-sitekey={SITE_KEY}></div>
+
+    <div class="toolbar">
+      <button type="submit" id="submit-btn">Submit suggestion</button>
+      <span class="note" id="status"></span>
+    </div>
+    <div id="error" class="error" hidden></div>
+    <div id="success" class="success" hidden>
+      Thanks — your suggestion was received and is queued for review.
+    </div>
+  </form>
+</Base>
+
+<style>
+  .submit-form { max-width: 42rem; }
+  .field { margin-bottom: 1rem; }
+  .field-row { display: flex; gap: 0.8rem; flex-wrap: wrap; }
+  .field-row .field { flex: 1; min-width: 9rem; }
+  .submit-form label { display: block; font-size: 0.9rem; margin-bottom: 0.3rem; font-weight: 600; }
+  .submit-form input, .submit-form select, .submit-form textarea { width: 100%; box-sizing: border-box; }
+  .submit-form .req { color: var(--accent); }
+  .submit-form .opt { color: var(--muted); font-weight: 400; }
+  .submit-form .cf-turnstile { margin: 1rem 0; }
+  .success {
+    color: #1a7f37; background: #ecfdf3; border: 1px solid #aee9c5;
+    padding: 0.7rem 0.9rem; border-radius: 4px; margin-top: 0.8rem;
+  }
+</style>
+
+<script>
+  import { createClient } from '@supabase/supabase-js';
+
+  const supabase = createClient(
+    import.meta.env.PUBLIC_SUPABASE_URL,
+    import.meta.env.PUBLIC_SUPABASE_ANON_KEY
+  );
+
+  const form = document.getElementById('submit-form') as HTMLFormElement;
+  const btn = document.getElementById('submit-btn') as HTMLButtonElement;
+  const statusEl = document.getElementById('status')!;
+  const errorEl = document.getElementById('error') as HTMLElement;
+  const successEl = document.getElementById('success') as HTMLElement;
+
+  function val(name: string): string {
+    const el = form.elements.namedItem(name) as HTMLInputElement | null;
+    return el ? el.value.trim() : '';
+  }
+
+  function turnstileToken(): string {
+    // Turnstile injects a hidden input named cf-turnstile-response into the form.
+    const el = form.elements.namedItem('cf-turnstile-response') as HTMLInputElement | null;
+    return el ? el.value : '';
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorEl.hidden = true;
+    successEl.hidden = true;
+
+    if (!val('title')) {
+      errorEl.hidden = false;
+      errorEl.textContent = 'Please enter a film title.';
+      return;
+    }
+    const token = turnstileToken();
+    if (!token) {
+      errorEl.hidden = false;
+      errorEl.textContent = 'Please complete the captcha.';
+      return;
+    }
+
+    btn.disabled = true;
+    statusEl.textContent = 'Sending…';
+    try {
+      const { data, error } = await supabase.functions.invoke('submit-movie', {
+        body: {
+          title: val('title'),
+          year: val('year') || null,
+          usccb_code: val('usccb_code') || null,
+          mpaa_rating: val('mpaa_rating') || null,
+          explanation: val('explanation') || null,
+          source_url: val('source_url') || null,
+          submitter_name: val('submitter_name') || null,
+          turnstileToken: token,
+        },
+      });
+      // functions.invoke surfaces non-2xx as `error`; the body may carry a message.
+      if (error) {
+        let msg = error.message;
+        try {
+          const ctx = (error as any).context;
+          if (ctx && typeof ctx.json === 'function') {
+            const j = await ctx.json();
+            if (j?.error) msg = j.error;
+          }
+        } catch { /* fall back to error.message */ }
+        throw new Error(msg);
+      }
+      if (data && (data as any).error) throw new Error((data as any).error);
+
+      form.reset();
+      successEl.hidden = false;
+      statusEl.textContent = '';
+    } catch (err) {
+      errorEl.hidden = false;
+      errorEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.textContent = '';
+    } finally {
+      btn.disabled = false;
+      // Reset the widget so a new token is required for the next submission.
+      (window as any).turnstile?.reset();
+    }
+  });
+</script>

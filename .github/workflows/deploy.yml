@@ -41,6 +41,10 @@ jobs:
           # Same public values, exposed to the browser for the /query page.
           PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          # Cloudflare Turnstile site key for the /submit form (public value).
+          # If the secret is unset, submit.astro falls back to Cloudflare's test
+          # key; set TURNSTILE_SITE_KEY as a repo secret to use a real widget.
+          PUBLIC_TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
 
   deploy:
     needs: build
