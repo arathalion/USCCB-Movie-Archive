@@ -43,6 +43,17 @@ const base = import.meta.env.BASE_URL;
     Spotted a film that's missing or mis-rated? You can <a href={`${base}submit`}>suggest one</a> —
     submissions are reviewed by a moderator before anything is added.
   </p>
+
+  <h2>Data &amp; API</h2>
+  <p>
+    The whole collection is open. Download the full dataset as
+    <a href={`${base}downloads/usccb_movie_archive.sqlite`}>SQLite</a> or
+    <a href={`${base}downloads/usccb_movie_archive.csv`}>CSV</a>, or query it live as
+    JSON: there's a read-only
+    <a href="https://github.com/arathalion/USCCB-Movie-Archive/blob/main/docs/api.md">public API</a>
+    (Supabase&nbsp;PostgREST) with filtering, sorting, full-text search, and genres —
+    no signup required. The site itself runs on the same backend.
+  </p>
   <p class="note">
     Notes on the data: <code>year</code> is missing for ~3.6% of films and <code>mpaa_rating</code>
     for ~42% (mostly pre-1968 and foreign titles). Full reviews exist for 1,619 films; the rest

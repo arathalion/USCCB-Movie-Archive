@@ -6,10 +6,10 @@ Pages**; the data lives in **Supabase Postgres**, which is the single source of
 truth. Detail pages are pre-rendered at build time from Postgres, while browse and
 SQL run live against Supabase from the browser.
 
-> Migrating from the original static SQLite-in-browser site to a Supabase backend.
-> Phases 1–3 (plus the live browse/query rework) are done; phases 4–8 are planned.
-> See [Status & phases](#status--phases) below. `CLAUDE.md` predates this rework and
-> is partly stale.
+> Migrated from the original static SQLite-in-browser site to a Supabase backend.
+> Phases 1–7 are done (live browse/query, submissions, filtering, TMDB enrichment,
+> schema refactor, public API); only the optional phase 8 admin SPA remains.
+> See [Status & phases](#status--phases) below.
 
 ## Quick start
 
@@ -131,7 +131,7 @@ only for genuinely dynamic features. The 8-phase plan
 | 5 | Filtering, sorting, shareable URL state, A–Z navigation, clickable rating chips | ✅ done |
 | 6 | TMDB enrichment into Postgres (posters + metadata) | ✅ done (~12.4k films enriched) |
 | — | Schema refactor: 1:1 `movie_tmdb` table + `redirects` table (drop `movies.is_redirect`) | ✅ done |
-| 7 | Public read-only API (PostgREST view over `public_movies_api`) | ⬜ next |
+| 7 | Public read-only API (PostgREST over `public_movies_api`); see [`docs/api.md`](docs/api.md) | ✅ done |
 | 8 | Custom moderator admin SPA (only if Studio proves insufficient) | ⬜ planned |
 
 The live browse/query rework departed from the plan: a GitHub Pages quirk (it gzips
@@ -158,3 +158,19 @@ node --env-file=.env scripts/apply_tmdb.mjs
 After step 2, the next `npm run build` (or a CI redeploy) renders posters/genres. The
 `TMDB_API_KEY` stays script-time only — never shipped to the client. (`scripts/apply_tmdb.py`
 is the older variant that writes the legacy SQLite/exports for the separate export site.)
+
+## Public API (Phase 7)
+
+The data is also a read-only JSON API via Supabase PostgREST — the same backend the
+browse page uses. The curated `public_movies_api` view (one row per real film, with
+TMDB fields + a `genres[]` array, safe columns only) is granted `SELECT` to `anon`;
+writes are rejected. Full reference, including filtering, sorting, paging, and
+full-text search (`search_tsv` `wfts`), is in **[`docs/api.md`](docs/api.md)**. No
+signup or per-user key — requests carry the public anon key. Quick taste:
+
+```bash
+KEY="sb_publishable_MnMcji0ZPqJZPTn911Sg1A_KCzvBVO3"
+BASE="https://vjtavurzjxfjczpvtpdq.supabase.co/rest/v1"
+curl "$BASE/public_movies_api?select=title,year,usccb_code,genres&usccb_code=eq.O&year=gte.2000&limit=5" \
+  -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
+```
