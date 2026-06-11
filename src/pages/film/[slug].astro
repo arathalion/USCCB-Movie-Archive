@@ -29,8 +29,8 @@ const tmdbUrl = film.tmdb_id ? `https://www.themoviedb.org/movie/${film.tmdb_id}
 <Base title={film.title} description={desc} active="browse">
   <p class="backlink"><a href={base}>← Back to browse</a></p>
 
-  <div class="film-head">
-    <div class="film-head-main">
+  <div class="film-layout">
+    <div class="film-main">
       <h1>{film.title}</h1>
       <p class="meta">
         {film.year ?? 'Year unknown'}
@@ -42,57 +42,62 @@ const tmdbUrl = film.tmdb_id ? `https://www.themoviedb.org/movie/${film.tmdb_id}
       {genres.length > 0 && (
         <p class="chip-row genres">{genres.map((g) => <span class="chip">{g}</span>)}</p>
       )}
+
+      {film.synopsis && <p class="synopsis">{film.synopsis}</p>}
+
+      {paragraphs.length > 0 && (
+        <section class="review">
+          <h2>Full review</h2>
+          {paragraphs.map((p) => <p>{p}</p>)}
+        </section>
+      )}
+
+      {usccb && (
+        <p class="note" style="margin-top:1.5rem;">
+          USCCB rating <strong>{usccb}</strong>: {USCCB_LEGEND[usccb]}.
+        </p>
+      )}
+
+      {tmdbUrl && (
+        <p class="note">
+          Poster and genre data from <a href={tmdbUrl} target="_blank" rel="noopener">The Movie Database ↗</a>.
+        </p>
+      )}
     </div>
+
     {posterUrl && (
-      <img
-        class="poster"
-        src={posterUrl}
-        alt={`Poster for ${film.title}`}
-        loading="lazy"
-        width="171"
-        height="257"
-      />
+      <aside class="film-aside">
+        {tmdbUrl ? (
+          <a class="poster-link" href={tmdbUrl} target="_blank" rel="noopener" title={`View ${film.title} on The Movie Database`}>
+            <img class="poster" src={posterUrl} alt={`Poster for ${film.title}`} loading="lazy" width="220" height="330" />
+          </a>
+        ) : (
+          <img class="poster" src={posterUrl} alt={`Poster for ${film.title}`} loading="lazy" width="220" height="330" />
+        )}
+      </aside>
     )}
   </div>
-
-  {film.synopsis && <p class="synopsis">{film.synopsis}</p>}
-
-  {paragraphs.length > 0 && (
-    <section class="review">
-      <h2>Full review</h2>
-      {paragraphs.map((p) => <p>{p}</p>)}
-    </section>
-  )}
-
-  {usccb && (
-    <p class="note" style="margin-top:1.5rem;">
-      USCCB rating <strong>{usccb}</strong>: {USCCB_LEGEND[usccb]}.
-    </p>
-  )}
-
-  {tmdbUrl && (
-    <p class="note">
-      Poster and genre data from <a href={tmdbUrl} target="_blank" rel="noopener">The Movie Database ↗</a>.
-    </p>
-  )}
 </Base>
 
 <style>
-  .film-head { display: flex; gap: 1.25rem; align-items: flex-start; }
-  .film-head-main { flex: 1; min-width: 0; }
-  .film-head h1 { margin-top: 0; }
+  .film-layout { display: flex; gap: 2rem; align-items: flex-start; }
+  .film-main { flex: 1; min-width: 0; }
+  .film-main h1 { margin-top: 0; }
   .genres { margin: 0.5rem 0 0; }
+  .film-aside { flex-shrink: 0; width: 220px; }
   .poster {
-    flex-shrink: 0;
-    width: 171px;
+    display: block;
+    width: 100%;
     height: auto;
     aspect-ratio: 2 / 3;
     object-fit: cover;
     border-radius: 4px;
     border: 1px solid var(--line);
   }
-  @media (max-width: 32rem) {
-    .film-head { flex-direction: column-reverse; align-items: stretch; }
-    .poster { width: 130px; }
+  .poster-link { display: block; }
+  .poster-link:hover .poster { border-color: var(--ink); box-shadow: 0 2px 10px rgba(0,0,0,0.18); }
+  @media (max-width: 40rem) {
+    .film-layout { flex-direction: column-reverse; align-items: stretch; }
+    .film-aside { width: 160px; }
   }
 </style>
