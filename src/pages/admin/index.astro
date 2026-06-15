@@ -1,0 +1,479 @@
+---
+// Moderator admin SPA (Phase 8). The whole site is static (GitHub Pages), and
+// submission ids only exist at runtime, so this is a single client-rendered page:
+// a login gate followed by a master/detail moderation view. It is deliberately NOT
+// linked from the public nav. Security is enforced by RLS, not this UI — every read
+// and write goes browser → PostgREST as the signed-in moderator (private.is_moderator()).
+import '../../styles/global.css';
+const base = import.meta.env.BASE_URL; // always ends with "/"
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Moderation · USCCB Movie Reviews Archive</title>
+    <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml" />
+  </head>
+  <body class="admin">
+    <header class="admin-header">
+      <div class="wrap">
+        <strong>Moderation</strong>
+        <span class="sub">USCCB Movie Reviews Archive</span>
+        <span class="spacer"></span>
+        <span id="who" class="note" hidden></span>
+        <button id="signout" class="secondary" hidden>Sign out</button>
+      </div>
+    </header>
+
+    <main>
+      <div class="wrap">
+        <!-- Boot / loading state -->
+        <p id="boot" class="note">Loading…</p>
+
+        <!-- Login -->
+        <section id="login" hidden>
+          <h1>Moderator sign in</h1>
+          <p class="lede">Sign in with your moderator account to review submissions.</p>
+          <form id="login-form" class="login-form">
+            <div class="field">
+              <label for="email">Email</label>
+              <input type="email" id="email" name="email" autocomplete="username" required />
+            </div>
+            <div class="field">
+              <label for="password">Password</label>
+              <input type="password" id="password" name="password" autocomplete="current-password" required />
+            </div>
+            <div class="toolbar">
+              <button type="submit" id="login-btn">Sign in</button>
+              <span class="note" id="login-status"></span>
+            </div>
+            <div id="login-error" class="error" hidden></div>
+          </form>
+        </section>
+
+        <!-- Not a moderator -->
+        <section id="denied" hidden>
+          <h1>Not authorized</h1>
+          <p class="lede">
+            This account is signed in but is not a moderator, so it can't read submissions.
+            Ask an existing moderator to add your user id to the <code>moderators</code> table.
+          </p>
+        </section>
+
+        <!-- App -->
+        <section id="app" hidden>
+          <div class="filter-bar chip-row" id="filters"></div>
+          <div class="board">
+            <aside class="list-pane">
+              <p class="note" id="list-status">Loading…</p>
+              <ul id="list" class="sub-list"></ul>
+            </aside>
+            <article class="detail-pane" id="detail">
+              <p class="note">Select a submission on the left to review it.</p>
+            </article>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <style>
+      body.admin { margin: 0; }
+      .admin-header {
+        border-bottom: 1px solid var(--line); background: var(--paper);
+        position: sticky; top: 0; z-index: 5;
+      }
+      .admin-header .wrap {
+        display: flex; align-items: center; gap: 0.6rem;
+        max-width: 80rem; margin: 0 auto; padding: 0.7rem 1rem;
+      }
+      .admin-header .sub { color: var(--muted); font-size: 0.85rem; }
+      .admin-header .spacer { flex: 1; }
+      main .wrap { max-width: 80rem; margin: 0 auto; padding: 1rem; }
+
+      .login-form { max-width: 24rem; }
+      .field { margin-bottom: 0.9rem; }
+      .field label { display: block; font-size: 0.9rem; margin-bottom: 0.3rem; font-weight: 600; }
+      .field input, .field select, .field textarea { width: 100%; box-sizing: border-box; }
+
+      .filter-bar { margin-bottom: 1rem; }
+      .filter-bar .chip[aria-pressed="true"] { border-color: var(--ink); background: var(--accent-soft); color: var(--accent); }
+
+      .board { display: grid; grid-template-columns: 22rem 1fr; gap: 1.2rem; align-items: start; }
+      @media (max-width: 50rem) { .board { grid-template-columns: 1fr; } }
+
+      .sub-list { list-style: none; margin: 0; padding: 0; max-height: 75vh; overflow: auto; }
+      .sub-list li { border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.6rem; margin-bottom: 0.4rem; cursor: pointer; }
+      .sub-list li:hover { border-color: var(--ink); }
+      .sub-list li[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+      .sub-list .li-title { font-weight: 600; }
+      .sub-list .li-meta { font-size: 0.8rem; color: var(--muted); display: flex; gap: 0.4rem; justify-content: space-between; }
+
+      .status-badge {
+        display: inline-block; font-size: 0.72rem; font-family: var(--mono);
+        border: 1px solid var(--line); border-radius: 999px; padding: 0.05rem 0.45rem;
+        text-transform: uppercase; letter-spacing: 0.02em;
+      }
+      .status-pending { border-color: #b58900; color: #8a6d00; background: #fdf6e3; }
+      .status-approved { border-color: #1a7f37; color: #1a7f37; background: #ecfdf3; }
+      .status-imported { border-color: #1a7f37; color: #0f5c28; background: #ddf5e4; }
+      .status-rejected { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+      .status-needs_more_info { border-color: #1f6feb; color: #1f6feb; background: #eaf2ff; }
+      .status-duplicate { border-color: var(--muted); color: var(--muted); background: var(--code-bg); }
+
+      .detail-pane { border: 1px solid var(--line); border-radius: 6px; padding: 1rem 1.2rem; }
+      .detail-pane h2 { margin-top: 0; }
+      .meta-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; font-size: 0.9rem; margin: 0.6rem 0 1.2rem; }
+      .meta-grid dt { color: var(--muted); }
+      .meta-grid dd { margin: 0; }
+      .pre-wrap { white-space: pre-wrap; }
+
+      .panel { border-top: 1px solid var(--line); padding-top: 1rem; margin-top: 1rem; }
+      .panel h3 { margin: 0 0 0.6rem; font-size: 1rem; }
+      .field-row { display: flex; gap: 0.8rem; flex-wrap: wrap; }
+      .field-row .field { flex: 1; min-width: 8rem; }
+
+      .history { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
+      .history li { padding: 0.4rem 0; border-bottom: 1px dotted var(--line); }
+      .history .h-note { color: var(--muted); }
+
+      .success { color: #1a7f37; background: #ecfdf3; border: 1px solid #aee9c5; padding: 0.5rem 0.7rem; border-radius: 4px; margin-top: 0.6rem; font-size: 0.9rem; }
+      .import-form { display: none; }
+      .import-form.open { display: block; }
+    </style>
+
+    <script>
+      import { createClient } from '@supabase/supabase-js';
+
+      const supabase = createClient(
+        import.meta.env.PUBLIC_SUPABASE_URL,
+        import.meta.env.PUBLIC_SUPABASE_ANON_KEY
+      );
+
+      // ---- constants ----
+      const USCCB: [string, string][] = [
+        ['A-I', 'General patronage'], ['A-II', 'Adults and adolescents'], ['A-III', 'Adults'],
+        ['A-IV', 'Adults, with reservations'], ['L', 'Limited adult audience'], ['O', 'Morally offensive'],
+      ];
+      const MPAA = ['G', 'PG', 'PG-13', 'R', 'NC-17', 'Not Rated'];
+      const STATUSES = ['pending', 'approved', 'rejected', 'needs_more_info', 'duplicate', 'imported'];
+      const FILTERS = ['pending', 'needs_more_info', 'approved', 'imported', 'rejected', 'duplicate', 'all'];
+
+      // ---- elements ----
+      const $ = (id: string) => document.getElementById(id)!;
+      const bootEl = $('boot'), loginEl = $('login'), deniedEl = $('denied'), appEl = $('app');
+      const whoEl = $('who'), signoutEl = $('signout') as HTMLButtonElement;
+      const loginForm = $('login-form') as HTMLFormElement;
+      const loginBtn = $('login-btn') as HTMLButtonElement;
+      const loginStatus = $('login-status'), loginError = $('login-error');
+      const filtersEl = $('filters'), listEl = $('list'), listStatus = $('list-status'), detailEl = $('detail');
+
+      // Untrusted submission text → escape every interpolated value (XSS guard).
+      const esc = (s: unknown) =>
+        String(s ?? '').replace(/[&<>"']/g, (c) =>
+          ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+      const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString() : '—');
+
+      let currentFilter = 'pending';
+      let selectedId: string | null = null;
+      let rows: any[] = [];
+
+      // ---------- auth ----------
+      async function boot() {
+        const { data } = await supabase.auth.getSession();
+        await applySession(data.session);
+      }
+
+      async function applySession(session: any) {
+        bootEl.hidden = true;
+        if (!session) {
+          show('login');
+          return;
+        }
+        // Confirm moderator status (RLS lets a moderator read their own row).
+        const { data: mod } = await supabase
+          .from('moderators').select('user_id, display_name, email')
+          .eq('user_id', session.user.id).maybeSingle();
+        if (!mod) {
+          whoEl.hidden = false; whoEl.textContent = session.user.email;
+          signoutEl.hidden = false;
+          show('denied');
+          return;
+        }
+        whoEl.hidden = false;
+        whoEl.textContent = mod.display_name ? `${mod.display_name} (${mod.email})` : mod.email;
+        signoutEl.hidden = false;
+        show('app');
+        renderFilters();
+        await loadList();
+      }
+
+      function show(which: 'login' | 'denied' | 'app') {
+        loginEl.hidden = which !== 'login';
+        deniedEl.hidden = which !== 'denied';
+        appEl.hidden = which !== 'app';
+      }
+
+      loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        loginError.hidden = true;
+        loginBtn.disabled = true;
+        loginStatus.textContent = 'Signing in…';
+        const email = (loginForm.elements.namedItem('email') as HTMLInputElement).value.trim();
+        const password = (loginForm.elements.namedItem('password') as HTMLInputElement).value;
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        loginBtn.disabled = false;
+        loginStatus.textContent = '';
+        if (error) { loginError.hidden = false; loginError.textContent = error.message; return; }
+        loginForm.reset();
+        await applySession(data.session);
+      });
+
+      signoutEl.addEventListener('click', async () => {
+        await supabase.auth.signOut();
+        selectedId = null; rows = [];
+        whoEl.hidden = true; signoutEl.hidden = true;
+        detailEl.innerHTML = '<p class="note">Select a submission on the left to review it.</p>';
+        show('login');
+      });
+
+      // ---------- list ----------
+      function renderFilters() {
+        filtersEl.innerHTML = FILTERS.map((f) =>
+          `<button class="chip" role="button" data-filter="${f}" aria-pressed="${f === currentFilter}">${esc(f.replace(/_/g, ' '))}</button>`
+        ).join('');
+        filtersEl.querySelectorAll('button').forEach((b) =>
+          b.addEventListener('click', () => {
+            currentFilter = (b as HTMLElement).dataset.filter!;
+            renderFilters();
+            loadList();
+          }));
+      }
+
+      async function loadList() {
+        listStatus.textContent = 'Loading…';
+        let q = supabase.from('movie_submissions')
+          .select('id, title, year, status, submitter_name, created_at')
+          .order('created_at', { ascending: false }).limit(500);
+        if (currentFilter !== 'all') q = q.eq('status', currentFilter);
+        const { data, error } = await q;
+        if (error) { listStatus.textContent = `Error: ${error.message}`; return; }
+        rows = data || [];
+        listStatus.textContent = `${rows.length} submission${rows.length === 1 ? '' : 's'}`;
+        listEl.innerHTML = rows.map((r) => `
+          <li data-id="${esc(r.id)}" aria-selected="${r.id === selectedId}">
+            <div class="li-title">${esc(r.title)}${r.year ? ` <span class="note">(${esc(r.year)})</span>` : ''}</div>
+            <div class="li-meta">
+              <span class="status-badge status-${esc(r.status)}">${esc(r.status.replace(/_/g, ' '))}</span>
+              <span>${esc(fmtDate(r.created_at))}</span>
+            </div>
+          </li>`).join('');
+        listEl.querySelectorAll('li').forEach((li) =>
+          li.addEventListener('click', () => openDetail((li as HTMLElement).dataset.id!)));
+      }
+
+      // ---------- detail ----------
+      async function openDetail(id: string) {
+        selectedId = id;
+        listEl.querySelectorAll('li').forEach((li) =>
+          li.setAttribute('aria-selected', String((li as HTMLElement).dataset.id === id)));
+        detailEl.innerHTML = '<p class="note">Loading…</p>';
+
+        const [{ data: sub, error }, { data: events }] = await Promise.all([
+          supabase.from('movie_submissions').select('*').eq('id', id).single(),
+          supabase.from('submission_review_events').select('*').eq('submission_id', id)
+            .order('created_at', { ascending: true }),
+        ]);
+        if (error || !sub) { detailEl.innerHTML = `<p class="error">${esc(error?.message || 'Not found')}</p>`; return; }
+        renderDetail(sub, events || []);
+      }
+
+      function renderDetail(sub: any, events: any[]) {
+        const usccbOpts = ['<option value="">— none —</option>']
+          .concat(USCCB.map(([c, l]) => `<option value="${c}">${esc(c)} — ${esc(l)}</option>`)).join('');
+        const mpaaOpts = ['<option value="">— none —</option>']
+          .concat(MPAA.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`)).join('');
+        const statusOpts = STATUSES.map((s) => `<option value="${s}">${esc(s.replace(/_/g, ' '))}</option>`).join('');
+
+        detailEl.innerHTML = `
+          <h2>${esc(sub.title)}${sub.year ? ` <span class="note">(${esc(sub.year)})</span>` : ''}
+            <span class="status-badge status-${esc(sub.status)}">${esc(sub.status.replace(/_/g, ' '))}</span></h2>
+          <dl class="meta-grid">
+            <dt>Suggested USCCB</dt><dd>${esc(sub.usccb_code || '—')}</dd>
+            <dt>MPAA</dt><dd>${esc(sub.mpaa_rating || '—')}</dd>
+            <dt>Submitter</dt><dd>${esc(sub.submitter_name || '—')}</dd>
+            <dt>Source</dt><dd>${sub.source_url ? `<a href="${esc(sub.source_url)}" target="_blank" rel="noopener nofollow">${esc(sub.source_url)}</a>` : '—'}</dd>
+            <dt>Submitted</dt><dd>${esc(fmtDate(sub.created_at))}</dd>
+            <dt>Last reviewed</dt><dd>${esc(fmtDate(sub.reviewed_at))}</dd>
+            <dt>Linked movie id</dt><dd>${sub.linked_movie_id ? esc(sub.linked_movie_id) : '—'}</dd>
+          </dl>
+          <div><strong>Explanation / notes from submitter</strong>
+            <p class="pre-wrap">${esc(sub.explanation || '—')}</p></div>
+
+          <div class="panel">
+            <h3>Review</h3>
+            <div class="field">
+              <label for="d-status">Status</label>
+              <select id="d-status">${statusOpts}</select>
+            </div>
+            <div class="field">
+              <label for="d-linked">Linked movie id <span class="note">(for duplicate / imported)</span></label>
+              <input type="number" id="d-linked" min="1" placeholder="movies.id" />
+            </div>
+            <div class="field">
+              <label for="d-notes">Admin notes <span class="note">(recorded with the status change)</span></label>
+              <textarea id="d-notes" rows="3"></textarea>
+            </div>
+            <div class="toolbar">
+              <button id="d-save">Save review</button>
+              <button id="d-import" class="secondary">Import to movies →</button>
+              <span class="note" id="d-status-msg"></span>
+            </div>
+            <div id="d-error" class="error" hidden></div>
+            <div id="d-success" class="success" hidden></div>
+          </div>
+
+          <div class="panel import-form" id="import-panel">
+            <h3>Import to movies</h3>
+            <p class="note">Creates a new <code>movies</code> row, then marks this submission
+              <em>imported</em> and links it. The film goes live on the next site rebuild.</p>
+            <div class="field"><label for="i-title">Title</label><input type="text" id="i-title" /></div>
+            <div class="field-row">
+              <div class="field"><label for="i-year">Year</label><input type="number" id="i-year" min="1880" max="2030" /></div>
+              <div class="field"><label for="i-usccb">USCCB</label><select id="i-usccb">${usccbOpts}</select></div>
+              <div class="field"><label for="i-mpaa">MPAA</label><select id="i-mpaa">${mpaaOpts}</select></div>
+            </div>
+            <div class="field"><label for="i-synopsis">Synopsis (capsule)</label><textarea id="i-synopsis" rows="3"></textarea></div>
+            <div class="field"><label for="i-review">Full review <span class="note">(optional)</span></label><textarea id="i-review" rows="6"></textarea></div>
+            <div class="toolbar">
+              <button id="i-create">Create movie &amp; mark imported</button>
+              <button id="i-cancel" class="secondary">Cancel</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>Review history</h3>
+            ${events.length ? `<ul class="history">${events.map((ev) => `
+              <li><span class="status-badge status-${esc(ev.to_status)}">${esc(ev.to_status.replace(/_/g, ' '))}</span>
+                ${ev.from_status ? `<span class="note">from ${esc(ev.from_status.replace(/_/g, ' '))}</span>` : ''}
+                <span class="note">· ${esc(fmtDate(ev.created_at))}</span>
+                ${ev.note ? `<div class="h-note pre-wrap">${esc(ev.note)}</div>` : ''}</li>`).join('')}</ul>`
+              : '<p class="note">No review events yet.</p>'}
+          </div>`;
+
+        // Populate editable controls (values set as properties, never via innerHTML).
+        ($('d-status') as HTMLSelectElement).value = sub.status;
+        ($('d-linked') as HTMLInputElement).value = sub.linked_movie_id ?? '';
+        ($('d-notes') as HTMLTextAreaElement).value = sub.admin_notes ?? '';
+        // Prefill the import form from the submission.
+        ($('i-title') as HTMLInputElement).value = sub.title ?? '';
+        ($('i-year') as HTMLInputElement).value = sub.year ?? '';
+        ($('i-usccb') as HTMLSelectElement).value = sub.usccb_code ?? '';
+        ($('i-mpaa') as HTMLSelectElement).value = sub.mpaa_rating ?? '';
+
+        $('d-save').addEventListener('click', () => saveReview(sub));
+        $('d-import').addEventListener('click', () => $('import-panel').classList.toggle('open'));
+        $('i-cancel').addEventListener('click', () => $('import-panel').classList.remove('open'));
+        $('i-create').addEventListener('click', () => importToMovies(sub));
+      }
+
+      function detailFeedback(ok: string | null, err: string | null) {
+        const e = $('d-error'), s = $('d-success');
+        e.hidden = !err; s.hidden = !ok;
+        if (err) e.textContent = err;
+        if (ok) s.textContent = ok;
+      }
+
+      async function saveReview(sub: any) {
+        detailFeedback(null, null);
+        const status = ($('d-status') as HTMLSelectElement).value;
+        const notes = ($('d-notes') as HTMLTextAreaElement).value.trim() || null;
+        const linkedRaw = ($('d-linked') as HTMLInputElement).value.trim();
+        const linked = linkedRaw ? parseInt(linkedRaw, 10) : null;
+        const btn = $('d-save') as HTMLButtonElement;
+        btn.disabled = true; $('d-status-msg').textContent = 'Saving…';
+        // The before-update trigger logs an event + sets reviewed_by/at on status change.
+        const { error } = await supabase.from('movie_submissions')
+          .update({ status, admin_notes: notes, linked_movie_id: linked }).eq('id', sub.id);
+        btn.disabled = false; $('d-status-msg').textContent = '';
+        if (error) { detailFeedback(null, error.message); return; }
+        detailFeedback('Saved.', null);
+        await loadList();
+        await openDetail(sub.id);
+      }
+
+      // ---------- import to movies ----------
+      const slugify = (t: string) =>
+        t.toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '')
+          .trim().replace(/[\s_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'film';
+
+      // Article-aware first source letter, mirroring the browse letter bar.
+      function firstLetter(title: string): string {
+        const t = title.toLowerCase().replace(/^(the|a|an|la|le|les|el|il|lo|los|las)\s+/, '');
+        const m = t.match(/[a-z]/);
+        return m ? m[0] : 'x';
+      }
+
+      async function uniqueSlug(base: string): Promise<string> {
+        for (let i = 0; i < 50; i++) {
+          const cand = i === 0 ? base : `${base}-${i + 1}`;
+          const { data } = await supabase.from('movies').select('id').eq('slug', cand).maybeSingle();
+          if (!data) return cand;
+        }
+        return `${base}-${Date.now()}`;
+      }
+
+      async function importToMovies(sub: any) {
+        detailFeedback(null, null);
+        const title = ($('i-title') as HTMLInputElement).value.trim();
+        if (!title) { detailFeedback(null, 'Title is required to create a movie.'); return; }
+        const yearRaw = ($('i-year') as HTMLInputElement).value.trim();
+        const movie = {
+          title,
+          year: yearRaw ? parseInt(yearRaw, 10) : null,
+          usccb_code: ($('i-usccb') as HTMLSelectElement).value || null,
+          mpaa_rating: ($('i-mpaa') as HTMLSelectElement).value || null,
+          synopsis: ($('i-synopsis') as HTMLTextAreaElement).value.trim() || null,
+          full_review: ($('i-review') as HTMLTextAreaElement).value.trim() || null,
+          letter: firstLetter(title),
+        };
+        const btn = $('i-create') as HTMLButtonElement;
+        btn.disabled = true;
+        try {
+          // movies.id is a plain integer PK (preserves original archive ids) → assign max+1.
+          const { data: maxRow, error: maxErr } = await supabase
+            .from('movies').select('id').order('id', { ascending: false }).limit(1).maybeSingle();
+          if (maxErr) throw maxErr;
+          const nextId = (maxRow?.id ?? 0) + 1;
+          const slug = await uniqueSlug(slugify(title));
+
+          const { error: insErr } = await supabase.from('movies').insert({ id: nextId, slug, ...movie });
+          if (insErr) throw insErr;
+
+          // Mark the submission imported and link it to the new film.
+          const { error: updErr } = await supabase.from('movie_submissions')
+            .update({ status: 'imported', linked_movie_id: nextId }).eq('id', sub.id);
+          if (updErr) throw updErr;
+
+          $('import-panel').classList.remove('open');
+          detailFeedback(`Created movie #${nextId} (${slug}) and marked imported.`, null);
+          await loadList();
+          await openDetail(sub.id);
+        } catch (err: any) {
+          detailFeedback(null, err?.message || String(err));
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      // React to token refresh / external sign-out.
+      supabase.auth.onAuthStateChange((event) => {
+        if (event === 'SIGNED_OUT') show('login');
+      });
+
+      boot();
+    </script>
+  </body>
+</html>

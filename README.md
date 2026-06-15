@@ -7,8 +7,8 @@ truth. Detail pages are pre-rendered at build time from Postgres, while browse a
 SQL run live against Supabase from the browser.
 
 > Migrated from the original static SQLite-in-browser site to a Supabase backend.
-> Phases 1–7 are done (live browse/query, submissions, filtering, TMDB enrichment,
-> schema refactor, public API); only the optional phase 8 admin SPA remains.
+> All 8 phases are done (live browse/query, submissions, filtering, TMDB enrichment,
+> schema refactor, public API, and the moderator admin SPA at `/admin`).
 > See [Status & phases](#status--phases) below.
 
 ## Quick start
@@ -97,8 +97,16 @@ always passes). To enable real bot protection in production:
 
 The `submit-movie` Edge Function (`supabase/functions/submit-movie/`) is the only write
 path to `movie_submissions`; deploy changes with `supabase functions deploy submit-movie`.
-Moderate the `pending` queue in Supabase Studio (set `status`, write `admin_notes`,
-link `linked_movie_id`; an `after`/`before update` trigger logs review events).
+
+### Moderation (Phase 8)
+
+Review the queue either in **Supabase Studio** or the built-in **admin SPA at `/admin`**
+(`src/pages/admin/index.astro`) — a moderator-only, client-rendered page (not linked from
+the public nav). Moderators sign in with Supabase Auth, filter submissions by status,
+change `status`/`admin_notes`/`linked_movie_id` (a `before update` trigger logs review
+events), and **import** a submission into `movies` in one step. RLS is the only security
+boundary; imported films go live on the next rebuild. Seeding moderators and the required
+`movies` write grant are documented in [`docs/moderation.md`](docs/moderation.md).
 
 ## Deploying to GitHub Pages
 
@@ -132,7 +140,7 @@ only for genuinely dynamic features. The 8-phase plan
 | 6 | TMDB enrichment into Postgres (posters + metadata) | ✅ done (~12.4k films enriched) |
 | — | Schema refactor: 1:1 `movie_tmdb` table + `redirects` table (drop `movies.is_redirect`) | ✅ done |
 | 7 | Public read-only API (PostgREST over `public_movies_api`); see [`docs/api.md`](docs/api.md) | ✅ done |
-| 8 | Custom moderator admin SPA (only if Studio proves insufficient) | ⬜ planned |
+| 8 | Custom moderator admin SPA at `/admin` (login, review queue, import to movies); see [`docs/moderation.md`](docs/moderation.md) | ✅ done |
 
 The live browse/query rework departed from the plan: a GitHub Pages quirk (it gzips
 files and serves *compressed* byte ranges) made the in-browser SQLite range-request
