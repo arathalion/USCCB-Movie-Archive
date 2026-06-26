@@ -1,0 +1,40 @@
+name: Supabase keep-alive
+
+# Supabase free-tier projects are paused after 7 days with no activity.
+# This pings the Movie-Archive project's REST API on a schedule so the
+# inactivity timer keeps resetting and the project stays awake.
+#
+# Runs Mondays & Thursdays (max ~4-day gap, well under the 7-day pause window).
+# Can also be triggered manually from the Actions tab.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1,4"   # 06:17 UTC every Monday and Thursday
+  workflow_dispatch:
+
+# The anon key is a public, client-safe key (the project relies on RLS, and
+# the pinged table only exposes the public USCCB rating legend). It is fine to
+# keep inline here. To rotate it out, define repo secrets SUPABASE_URL and
+# SUPABASE_ANON_KEY and the step below will prefer them.
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://vjtavurzjxfjczpvtpdq.supabase.co' }}
+  SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZqdGF2dXJ6anhmamN6cHZ0cGRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMTQzNTIsImV4cCI6MjA5NjY5MDM1Mn0.uOpVX2sQ_ozsIxudmMkv56iZw586fBrWJ-yZ_ETwRqA' }}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST API
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/body.txt -w "%{http_code}" \
+            "${SUPABASE_URL}/rest/v1/usccb_ratings?select=*&limit=1" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}")
+          echo "HTTP ${code}"
+          cat /tmp/body.txt
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::Supabase keep-alive ping failed with HTTP ${code}"
+            exit 1
+          fi
+          echo "Supabase keep-alive ping OK."
