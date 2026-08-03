@@ -1,0 +1,6 @@
+{"code":"A-I","label":"A-I","description":"General patronage","sort_order":1}
+{"code":"A-II","label":"A-II","description":"Adults and adolescents","sort_order":2}
+{"code":"A-III","label":"A-III","description":"Adults","sort_order":3}
+{"code":"A-IV","label":"A-IV","description":"Adults, with reservations","sort_order":4}
+{"code":"L","label":"L","description":"Limited adult audience","sort_order":5}
+{"code":"O","label":"O","description":"Morally offensive","sort_order":6}

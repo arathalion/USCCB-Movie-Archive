@@ -1,0 +1,19 @@
+{"id":4,"name":"Action","tmdb_genre_id":28}
+{"id":5,"name":"Crime","tmdb_genre_id":80}
+{"id":6,"name":"Drama","tmdb_genre_id":18}
+{"id":7,"name":"Thriller","tmdb_genre_id":53}
+{"id":8,"name":"Mystery","tmdb_genre_id":9648}
+{"id":9,"name":"Science Fiction","tmdb_genre_id":878}
+{"id":10,"name":"Horror","tmdb_genre_id":27}
+{"id":11,"name":"Comedy","tmdb_genre_id":35}
+{"id":12,"name":"Romance","tmdb_genre_id":10749}
+{"id":13,"name":"Music","tmdb_genre_id":10402}
+{"id":14,"name":"Adventure","tmdb_genre_id":12}
+{"id":15,"name":"History","tmdb_genre_id":36}
+{"id":16,"name":"Western","tmdb_genre_id":37}
+{"id":17,"name":"War","tmdb_genre_id":10752}
+{"id":18,"name":"Family","tmdb_genre_id":10751}
+{"id":19,"name":"Fantasy","tmdb_genre_id":14}
+{"id":20,"name":"Animation","tmdb_genre_id":16}
+{"id":21,"name":"Documentary","tmdb_genre_id":99}
+{"id":22,"name":"TV Movie","tmdb_genre_id":10770}
