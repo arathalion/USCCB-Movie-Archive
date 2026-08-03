@@ -1,0 +1,20 @@
+name = "movie-archive-api"
+main = "src/index.js"
+compatibility_date = "2026-08-03"
+
+# Created with:
+#   wrangler d1 create movie-archive
+# then paste the returned database_id below.
+[[d1_databases]]
+binding = "DB"
+database_name = "movie-archive"
+# Placeholder so `wrangler dev --local` works before a real DB exists;
+# replace with the id from `wrangler d1 create` before deploying.
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# TURNSTILE_SECRET is a secret, not a var — set it with:
+#   wrangler secret put TURNSTILE_SECRET
+# If unset, /submit skips captcha verification (fine locally, not in production).
+
+[observability]
+enabled = true
