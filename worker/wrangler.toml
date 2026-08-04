@@ -8,9 +8,7 @@ compatibility_date = "2026-08-03"
 [[d1_databases]]
 binding = "DB"
 database_name = "movie-archive"
-# Placeholder so `wrangler dev --local` works before a real DB exists;
-# replace with the id from `wrangler d1 create` before deploying.
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "4d973dfd-4977-48e8-adb3-46dcfd809676"
 
 # TURNSTILE_SECRET is a secret, not a var — set it with:
 #   wrangler secret put TURNSTILE_SECRET
