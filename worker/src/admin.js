@@ -107,6 +107,16 @@ const PAGE_CSS = `
            border:1px solid var(--line); border-radius:4px; }
   .empty { color:var(--muted); font-style:italic; }
   a { color:var(--accent); }
+  .editor { border-top:1px solid var(--line); margin-top:.75rem; padding-top:.75rem; }
+  .f { display:block; margin-bottom:.6rem; }
+  .f span { display:block; font-size:.8rem; font-weight:600; margin-bottom:.2rem; }
+  .f input, .f textarea { width:100%; padding:.4rem; border:1px solid var(--line);
+    border-radius:4px; background:var(--bg); color:var(--ink); font:inherit; }
+  .row { display:flex; gap:.6rem; }
+  .row .f { flex:1; }
+  .pubmsg { font-size:.85rem; margin:.6rem 0 0; }
+  .pubmsg.ok { color:#1a7f37; }
+  .pubmsg.err { color:#b3261e; }
 `;
 
 export function loginPage(error) {
@@ -166,6 +176,15 @@ function safeHref(u) {
   } catch { return null; }
 }
 
+function field(id, label, value, opts) {
+  return '<label class="f"><span>' + label + '</span>' +
+    (opts && opts.textarea
+      ? '<textarea id="' + id + '" rows="5">' + esc(value) + '</textarea>'
+      : '<input id="' + id + '" value="' + esc(value) + '"' +
+        (opts && opts.type ? ' type="' + opts.type + '"' : '') + '>') +
+    '</label>';
+}
+
 function card(s) {
   const bits = [s.year, s.usccb_code, s.mpaa_rating].filter(Boolean)
     .map((b) => '<span class="chip">' + esc(b) + '</span>').join('');
@@ -177,16 +196,38 @@ function card(s) {
       : '<span title="not a http(s) URL — shown as text">' + esc(s.source_url) + '</span>') + '</p>';
   }
   const who = s.submitter_name ? ' &middot; ' + esc(s.submitter_name) : '';
+
+  // Pending rows get the editable publish form; reviewed rows are read-only.
+  const editor = s.status === 'pending'
+    ? '<div class="editor" id="ed-' + s.id + '" hidden>' +
+        '<p class="meta">Check these before publishing &mdash; they go into the archive verbatim. ' +
+        'The synopsis is prefilled from the submitter&rsquo;s notes, which are <em>not</em> archive prose.</p>' +
+        field('t-' + s.id, 'Title', s.title || '') +
+        '<div class="row">' +
+          field('y-' + s.id, 'Year', s.year == null ? '' : s.year, { type: 'number' }) +
+          field('u-' + s.id, 'USCCB', s.usccb_code || '') +
+          field('m-' + s.id, 'MPAA', s.mpaa_rating || '') +
+        '</div>' +
+        field('s-' + s.id, 'Synopsis', s.explanation || '', { textarea: true }) +
+        '<div class="actions">' +
+          '<button data-pub="' + s.id + '">Publish &rarr; open PR</button>' +
+          '<button class="ghost" data-cancel="' + s.id + '">Cancel</button>' +
+        '</div>' +
+        '<p class="pubmsg" id="msg-' + s.id + '"></p>' +
+      '</div>'
+    : '';
+
   const acts = s.status === 'pending'
-    ? '<div class="actions">' +
-      '<button data-id="' + s.id + '" data-to="accepted">Accept</button>' +
+    ? '<div class="actions" id="act-' + s.id + '">' +
+      '<button data-edit="' + s.id + '">Accept &amp; publish&hellip;</button>' +
       '<button class="ghost" data-id="' + s.id + '" data-to="rejected">Reject</button></div>'
     : '';
+
   return '<div class="card"><h2>' + esc(s.title) + '</h2>' +
     '<p class="meta">' + bits + ' #' + s.id + ' &middot; ' + esc(s.created_at) + who +
     ' &middot; <strong>' + esc(s.status) + '</strong></p>' +
     (s.explanation ? '<p class="expl">' + esc(s.explanation) + '</p>' : '') +
-    src + acts + '</div>';
+    src + acts + editor + '</div>';
 }
 
 async function load() {
@@ -202,6 +243,48 @@ async function load() {
 }
 
 listEl.addEventListener('click', async (e) => {
+  const edit = e.target.closest('button[data-edit]');
+  if (edit) {
+    document.getElementById('ed-' + edit.dataset.edit).hidden = false;
+    document.getElementById('act-' + edit.dataset.edit).hidden = true;
+    return;
+  }
+  const cancel = e.target.closest('button[data-cancel]');
+  if (cancel) {
+    document.getElementById('ed-' + cancel.dataset.cancel).hidden = true;
+    document.getElementById('act-' + cancel.dataset.cancel).hidden = false;
+    return;
+  }
+  const pub = e.target.closest('button[data-pub]');
+  if (pub) {
+    const id = pub.dataset.pub;
+    const msg = document.getElementById('msg-' + id);
+    const val = (p) => document.getElementById(p + '-' + id).value.trim();
+    pub.disabled = true;
+    msg.className = 'pubmsg';
+    msg.textContent = 'Opening pull request\u2026';
+    const r = await fetch('/admin/submissions/' + id + '/publish', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        title: val('t'), year: val('y'), usccb_code: val('u'),
+        mpaa_rating: val('m'), synopsis: val('s'),
+      }),
+    });
+    if (r.status === 401) { location.reload(); return; }
+    const d = await r.json().catch(() => null);
+    if (!r.ok) {
+      msg.className = 'pubmsg err';
+      msg.textContent = (d && d.message) || ('Failed (' + r.status + ')');
+      pub.disabled = false;
+      return;
+    }
+    msg.className = 'pubmsg ok';
+    msg.innerHTML = 'PR opened \u2014 <a href="' + esc(d.pr) + '" target="_blank" rel="noopener noreferrer">'
+      + 'review and merge to publish</a>. Slug <code>' + esc(d.slug) + '</code>.';
+    return;
+  }
   const b = e.target.closest('button[data-id]');
   if (!b) return;
   b.disabled = true;

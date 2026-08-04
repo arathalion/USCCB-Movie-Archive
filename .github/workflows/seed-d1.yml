@@ -1,0 +1,62 @@
+name: Re-seed D1
+
+# data/ is canonical; D1 is a derived serving copy that backs the public API.
+# Merging a film addition rebuilds the static site, but without this the API
+# would keep serving the old data until someone re-seeded by hand — the exact
+# drift docs/moderation.md warns about. This keeps them in step automatically.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'data/**'
+      - 'worker/schema.sql'
+      - 'scripts/build_d1_seed.mjs'
+  workflow_dispatch:
+
+# Never let two seeds overlap — the seed drops and recreates the content tables,
+# and interleaving them would leave the API serving a half-built database.
+concurrency:
+  group: seed-d1
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 26
+
+      - name: Build the seed from data/
+        run: node scripts/build_d1_seed.mjs
+
+      - name: Apply to D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not set — add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          cd worker
+          npx --yes wrangler@4 d1 execute movie-archive --remote --yes --file=seed.sql
+
+      - name: Verify the API sees the new data
+        run: |
+          set -euo pipefail
+          # The seed drops and recreates content tables; confirm the row count is
+          # sane rather than trusting a zero-row success.
+          n=$(curl -sf "https://movie-archive-api.viacrusis14.workers.dev/rest/v1/public_movies_api?select=id&limit=1" \
+                -H "Prefer: count=exact" -H "Range: 0-0" -D- -o /dev/null \
+              | tr -d '\r' | grep -i '^content-range' | sed 's|.*/||')
+          echo "API reports $n films"
+          if [ "${n:-0}" -lt 13000 ]; then
+            echo "::error::Only $n films visible after re-seed — expected 13,000+. D1 may be half-populated."
+            exit 1
+          fi

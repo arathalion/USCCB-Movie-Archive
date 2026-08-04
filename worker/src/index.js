@@ -13,6 +13,7 @@ import {
   loginPage, queuePage, SESSION_COOKIE, SESSION_TTL_SECONDS,
   makeSession, verifySession, readCookie, timingSafeEqual,
 } from './admin.js';
+import { allocate, letterFor, openPullRequest } from './publish.js';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -296,6 +297,58 @@ async function handleAdmin(request, env, path, url) {
       : env.DB.prepare(`${base} WHERE status = ? ORDER BY created_at DESC`).bind(status);
     const { results } = await stmt.all();
     return adminJson(results ?? []);
+  }
+
+  // Publish: take the moderator's edited fields, allocate id/slug, open a PR.
+  const pub = path.match(/^\/admin\/submissions\/(\d+)\/publish$/);
+  if (pub && request.method === 'POST') {
+    const submissionId = Number(pub[1]);
+    const body = await request.json().catch(() => null);
+
+    const title = typeof body?.title === 'string' ? body.title.trim() : '';
+    if (!title) return adminJson({ message: 'Title is required.' }, 400);
+
+    let year = null;
+    if (body?.year !== null && body?.year !== undefined && body?.year !== '') {
+      year = parseInt(body.year, 10);
+      if (Number.isNaN(year) || year < 1880 || year > 2100) {
+        return adminJson({ message: 'Year must be between 1880 and 2100.' }, 400);
+      }
+    }
+
+    const usccb = body?.usccb_code ? String(body.usccb_code).trim() : null;
+    if (usccb) {
+      const ok = await env.DB.prepare('SELECT 1 AS x FROM usccb_ratings WHERE code = ?').bind(usccb).first();
+      if (!ok) return adminJson({ message: `Unknown USCCB code "${usccb}".` }, 400);
+    }
+
+    const { id, slug } = await allocate(env.DB, title, year);
+    const film = {
+      id, slug, title, year,
+      usccb_code: usccb,
+      mpaa_rating: body?.mpaa_rating ? String(body.mpaa_rating).trim() : null,
+      synopsis: body?.synopsis ? String(body.synopsis).trim() : null,
+      full_review: null,
+      letter: letterFor(title),
+      source_file: `submission:${submissionId}`,
+    };
+
+    let pr;
+    try {
+      pr = await openPullRequest(env, film, submissionId);
+    } catch (e) {
+      return adminJson({ message: String(e?.message ?? e) }, 502);
+    }
+
+    // Only record the outcome once the PR actually exists, so a failed publish
+    // leaves the row in the queue to retry rather than silently disappearing.
+    await env.DB.prepare(
+      `UPDATE movie_submissions
+          SET status = 'accepted', reviewed_at = datetime('now'), reviewer = 'admin'
+        WHERE id = ?`
+    ).bind(submissionId).run();
+
+    return adminJson({ ok: true, pr: pr.url, slug, id });
   }
 
   const one = path.match(/^\/admin\/submissions\/(\d+)$/);

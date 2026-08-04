@@ -2,7 +2,7 @@
 // since the site moved off Supabase. (Postgres was canonical until the free-tier
 // project began pausing unpredictably; scripts/dump_from_postgres.mjs produced
 // these files.) Everything here runs at build time only; nothing ships to the client.
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 // Resolved from the working directory, not import.meta.url: Astro bundles this
@@ -37,7 +37,45 @@ function load(name) {
   return rows;
 }
 
-export function getMovies() { return load('movies'); }
+// Films accepted through the admin queue land as one small JSON file each under
+// data/additions/, rather than being appended to data/movies.ndjson. That file is
+// 14 MB — over GitHub's 1 MB Contents API read limit — so a Worker cannot
+// read-modify-write it. One file per addition also keeps PR diffs readable.
+function loadAdditions() {
+  if (cache.has('__additions')) return cache.get('__additions');
+  const dir = join(DATA, 'additions');
+  let names = [];
+  try {
+    names = readdirSync(dir).filter((n) => n.endsWith('.json')).sort();
+  } catch {
+    /* no additions yet — expected */
+  }
+  const rows = names.map((n) => {
+    try {
+      return JSON.parse(readFileSync(join(dir, n), 'utf8'));
+    } catch (e) {
+      throw new Error(`data/additions/${n}: ${e.message}`);
+    }
+  });
+  cache.set('__additions', rows);
+  return rows;
+}
+
+export function getMovies() {
+  if (cache.has('__movies_merged')) return cache.get('__movies_merged');
+  const extra = loadAdditions();
+  const base = load('movies');
+  // Additions are authored later, so let them win on an id/slug clash rather than
+  // silently producing two pages for one film.
+  const seen = new Set(extra.map((r) => r.id));
+  const slugs = new Set(extra.map((r) => r.slug));
+  const merged = base
+    .filter((r) => !seen.has(r.id) && !slugs.has(r.slug))
+    .concat(extra)
+    .sort((a, b) => a.id - b.id);
+  cache.set('__movies_merged', merged);
+  return merged;
+}
 export function getRedirects() { return load('redirects'); }
 export function getUsccbRatings() { return load('usccb_ratings'); }
 

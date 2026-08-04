@@ -14,5 +14,11 @@ database_id = "4d973dfd-4977-48e8-adb3-46dcfd809676"
 #   wrangler secret put TURNSTILE_SECRET
 # If unset, /submit skips captcha verification (fine locally, not in production).
 
+# Repo the admin "Publish" flow opens pull requests against. Public value.
+# The matching GITHUB_TOKEN is a secret:
+#   wrangler secret put GITHUB_TOKEN --name movie-archive-api
+[vars]
+GITHUB_REPO = "arathalion/USCCB-Movie-Archive"
+
 [observability]
 enabled = true

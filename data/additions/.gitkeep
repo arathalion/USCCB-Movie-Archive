@@ -1,0 +1,7 @@
+Films accepted through the admin queue are written here, one JSON file per film,
+by the Worker's publish flow (it opens a pull request). The build merges them
+with data/movies.ndjson — see src/lib/db.js.
+
+They are kept separate rather than appended to movies.ndjson because that file is
+14 MB, over GitHub's 1 MB Contents API read limit, so the Worker cannot
+read-modify-write it. One file per addition also keeps PR diffs readable.
