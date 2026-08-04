@@ -1,74 +1,94 @@
-# Moderation (admin SPA)
+# Moderating submissions
 
-Phase 8 of the migration: a moderator-only admin page for reviewing public
-submissions. It lives at **`/admin`** (e.g. `https://<user>.github.io/<repo>/admin/`)
-and is intentionally **not linked** from the public navigation.
+The public [`/submit`](../src/pages/submit.astro) form is the only write path into
+the archive. Submissions land in the `movie_submissions` table in D1 and appear
+nowhere on the site until you promote them by hand.
 
-## What it is
+> **Changed August 2026.** This used to be a login-gated admin SPA at `/admin`,
+> backed by Supabase Auth and RLS. The site moved off Supabase (the free-tier
+> project kept auto-pausing even with a working keep-alive), and D1 has no auth
+> layer, so moderation is now a handful of `wrangler` commands. The queue had
+> received zero submissions in its lifetime, so a browser UI plus an auth system
+> was a lot of surface for nothing. If volume ever justifies rebuilding it, the
+> place to do so is the Worker in `worker/`.
 
-A single client-rendered page (`src/pages/admin/index.astro`). The site is static
-(GitHub Pages), so there is no server — the admin talks to Supabase **directly from
-the browser** as the signed-in moderator. **Row Level Security is the only security
-boundary**; the UI gate is cosmetic. A signed-out (or non-moderator) browser making
-the same PostgREST calls is denied by RLS.
+Everything below runs from the `worker/` directory and needs `wrangler login` as
+the Cloudflare account that owns the `movie-archive` database.
 
-It uses the public `PUBLIC_SUPABASE_URL` / `PUBLIC_SUPABASE_ANON_KEY` (same as
-`/submit` and `/query`) plus a moderator's Supabase Auth session.
+## How a submission flows
 
-## Capabilities
-
-- **Sign in / out** with email + password (Supabase Auth `signInWithPassword`).
-  The session persists in `localStorage` and auto-refreshes.
-- **List submissions** filtered by status (`pending` by default; also
-  `needs_more_info`, `approved`, `imported`, `rejected`, `duplicate`, `all`).
-- **Review a submission**: change `status`, write `admin_notes`, set
-  `linked_movie_id` (for `duplicate`/`imported`). The `before update` trigger
-  (`private.log_submission_status_change`) auto-records a `submission_review_events`
-  row and stamps `reviewed_by`/`reviewed_at` on every status change.
-- **Import to movies**: creates a new `movies` row from the submission (assigning
-  `max(id)+1` and a unique slug, article-aware `letter`), then marks the submission
-  `imported` and links it. The new film goes live on the **next site rebuild**.
-- **Review history** per submission.
-
-## Seeding a moderator
-
-There are **no public accounts** — only moderators have Supabase Auth users.
-To add one:
-
-1. **Supabase Dashboard → Authentication → Users → Add user** (set an email +
-   password, or invite). Copy the new user's **UUID**.
-2. Insert the moderator row (Studio SQL editor or `psql`, service role):
-
-   ```sql
-   insert into public.moderators (user_id, email, display_name)
-   values ('<auth-user-uuid>', 'mod@example.com', 'Jane Moderator');
-   ```
-
-3. The user can now sign in at `/admin`. (Without the `moderators` row they'll see
-   "Not authorized" — RLS denies reads.)
-
-## Required grant
-
-The "Import to movies" flow writes `movies` from the browser as the moderator. That
-needs an explicit table grant for the `authenticated` role (RLS still gates rows via
-`movies_mod_write`):
-
-```sql
-revoke all on table public.movies from authenticated;
-grant select, insert, update, delete on table public.movies to authenticated;
+```
+/submit form  →  POST /submit on the Worker  →  Turnstile verified server-side
+              →  INSERT into movie_submissions (status='pending')
 ```
 
-This is migration `20260615280001_grant_movies_write_to_moderators.sql`. Apply it
-to the project (`supabase db push`, the Studio SQL editor, or the migration tooling)
-before relying on import. Reads, status changes, and notes work without it.
+The captcha is checked **on the Worker**, never in the browser — a client-side
+check is trivially bypassable. See `handleSubmit` in
+[`worker/src/index.js`](../worker/src/index.js).
 
-## Notes / limits
+## Review the queue
 
-- Imported films are **canonical immediately in Postgres** but only appear on the
-  static site after a rebuild/redeploy (browse + detail pages are built from
-  Postgres). Trigger a deploy when you want approved/imported films to publish.
-- `movies.id` is a plain integer PK (it preserves the original archive ids), so
-  import assigns `max(id)+1` client-side. With a single moderator this is safe; it
-  is not concurrency-hardened for simultaneous importers.
-- The import form does not attach TMDB data or genres — run the TMDB pipeline
-  (`scripts/tmdb_match.py` → `apply_tmdb.mjs`) afterward if enrichment is wanted.
+```bash
+cd worker
+npx wrangler d1 execute movie-archive --remote --yes \
+  --command "SELECT id, created_at, title, year, usccb_code, mpaa_rating,
+                    submitter_name, source_url, explanation
+               FROM movie_submissions
+              WHERE status = 'pending'
+              ORDER BY created_at;"
+```
+
+Add `--json` if you'd rather pipe it somewhere.
+
+## Accept or reject
+
+Mark the row either way so it leaves the queue:
+
+```bash
+npx wrangler d1 execute movie-archive --remote --yes --command "
+  UPDATE movie_submissions
+     SET status = 'accepted', reviewed_at = datetime('now'), reviewer = 'max'
+   WHERE id = 42;"
+```
+
+Use `'rejected'` for the other case.
+
+## Getting an accepted film onto the site
+
+**This is the step that's easy to get wrong.** D1 backs the live API, but the
+website's pages are static and built from `data/*.ndjson`. A row written straight
+into D1 shows up in the API immediately and on the site *never*.
+
+So `data/` stays canonical and D1 is a derived serving copy. Add the film to
+`data/movies.ndjson`, then re-seed:
+
+```bash
+# from the repo root — one JSON object per line, same keys as existing rows.
+# ids have gaps (they're the original archive ids); take max(id)+1, don't reuse
+# a gap. slug is the permanent URL key and must be unique.
+
+node scripts/build_d1_seed.mjs
+cd worker && npx wrangler d1 execute movie-archive --remote --yes --file=seed.sql
+```
+
+Then commit the `data/` change and push — that triggers the Pages rebuild which
+generates the new `/film/{slug}` page and refreshes `/browse-index.json`.
+
+Re-seeding drops and recreates the content tables, which also rebuilds the FTS
+index. `movie_submissions` is created with `IF NOT EXISTS` and is **not**
+dropped, so the queue survives a re-seed.
+
+## Spam
+
+Turnstile is the only gate, and an unset `TURNSTILE_SECRET` makes the Worker
+**skip verification entirely**. If the form starts attracting bots, check that
+first:
+
+```bash
+cd worker && npx wrangler secret list
+npx wrangler secret put TURNSTILE_SECRET     # from dash.cloudflare.com → Turnstile
+```
+
+The matching public site key is `PUBLIC_TURNSTILE_SITE_KEY` in the site's build
+env. Both currently default to Cloudflare's always-pass **test** keys, so the
+captcha is decorative until you set real ones.

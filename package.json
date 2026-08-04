@@ -14,7 +14,6 @@
     "preview": "astro preview"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.108.1",
     "astro": "^6.4.5"
   },
   "allowScripts": {

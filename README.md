@@ -2,14 +2,22 @@
 
 An archive of **13,205 USCCB / Catholic News Service movie reviews** (coverage
 **1905–2011**). The public site is built with **Astro** and deployed to **GitHub
-Pages**; the data lives in **Supabase Postgres**, which is the single source of
-truth. Detail pages are pre-rendered at build time from Postgres, while browse and
-SQL run live against Supabase from the browser.
+Pages**. The canonical data lives in **`data/*.ndjson`, committed to this repo**;
+detail pages are pre-rendered from it at build time, so the build needs no network
+and no credentials. Full-text search, the `/query` SQL editor, `/submit`, and the
+public API are served by a **Cloudflare Worker backed by D1** (`worker/`).
 
-> Migrated from the original static SQLite-in-browser site to a Supabase backend.
-> All 8 phases are done (live browse/query, submissions, filtering, TMDB enrichment,
-> schema refactor, public API, and the moderator admin SPA at `/admin`).
-> See [Status & phases](#status--phases) below.
+> **Moved off Supabase, August 2026.** The free-tier project kept auto-pausing —
+> and not for lack of traffic: a keep-alive had been pinging it successfully for
+> weeks, and it still paused 4 days after a verified database read, twice. Once
+> paused, Supabase withdraws the project's DNS record, so the keep-alive could not
+> even reach it to recover. Postgres was replaced by committed NDJSON (for the
+> build) plus D1 (for the live API), neither of which can pause.
+>
+> The public API kept its contract: same query dialect, resource names, response
+> shapes and `content-range` count header, and the old `apikey`/`Authorization`
+> headers are still accepted. **Callers only change the base URL.** See
+> [`docs/api.md`](docs/api.md).
 
 ## Quick start
 
@@ -95,18 +103,26 @@ always passes). To enable real bot protection in production:
 3. Publish the site key: set `PUBLIC_TURNSTILE_SITE_KEY` in `.env` and add a
    `TURNSTILE_SITE_KEY` repo secret for CI.
 
-The `submit-movie` Edge Function (`supabase/functions/submit-movie/`) is the only write
-path to `movie_submissions`; deploy changes with `supabase functions deploy submit-movie`.
+The Worker's `POST /submit` is the only write path to `movie_submissions`. It verifies
+the Cloudflare Turnstile token **server-side** before inserting — a browser-side check
+would be trivially bypassable.
 
-### Moderation (Phase 8)
+### Moderation
 
-Review the queue either in **Supabase Studio** or the built-in **admin SPA at `/admin`**
-(`src/pages/admin/index.astro`) — a moderator-only, client-rendered page (not linked from
-the public nav). Moderators sign in with Supabase Auth, filter submissions by status,
-change `status`/`admin_notes`/`linked_movie_id` (a `before update` trigger logs review
-events), and **import** a submission into `movies` in one step. RLS is the only security
-boundary; imported films go live on the next rebuild. Seeding moderators and the required
-`movies` write grant are documented in [`docs/moderation.md`](docs/moderation.md).
+Review the queue with `wrangler` against D1; there is no admin UI. The former
+login-gated SPA at `/admin` was removed with the Supabase migration (D1 has no auth
+layer, and the queue had received zero submissions in its lifetime).
+
+```bash
+cd worker
+npx wrangler d1 execute movie-archive --remote --yes \
+  --command "SELECT id, created_at, title, year, submitter_name, explanation
+               FROM movie_submissions WHERE status = 'pending' ORDER BY created_at;"
+```
+
+Accepting a film means editing `data/movies.ndjson` and re-seeding D1 from it —
+`data/` is canonical, D1 is a derived serving copy. Full walkthrough in
+[`docs/moderation.md`](docs/moderation.md).
 
 ## Deploying to GitHub Pages
 
@@ -140,11 +156,19 @@ only for genuinely dynamic features. The 8-phase plan
 | 6 | TMDB enrichment into Postgres (posters + metadata) | ✅ done (~12.4k films enriched) |
 | — | Schema refactor: 1:1 `movie_tmdb` table + `redirects` table (drop `movies.is_redirect`) | ✅ done |
 | 7 | Public read-only API (PostgREST over `public_movies_api`); see [`docs/api.md`](docs/api.md) | ✅ done |
-| 8 | Custom moderator admin SPA at `/admin` (login, review queue, import to movies); see [`docs/moderation.md`](docs/moderation.md) | ✅ done |
+| 8 | Custom moderator admin SPA at `/admin` (login, review queue, import to movies) | ⛔ removed in phase 9 |
+| 9 | **Migrate off Supabase** → committed `data/*.ndjson` + Cloudflare Worker/D1; API contract preserved; `/admin` retired for CLI moderation | ✅ done |
 
 The live browse/query rework departed from the plan: a GitHub Pages quirk (it gzips
 files and serves *compressed* byte ranges) made the in-browser SQLite range-request
-DB unusable, so browse and `/query` now query Supabase directly instead.
+DB unusable, so browse and `/query` queried Supabase directly instead.
+
+Phase 9 undid part of that. Browse is static again — but via a prebuilt
+`/browse-index.json` (884 KB, ~257 KB gzipped) that the browser filters, sorts and
+pages itself, rather than range requests into a SQLite file. That sidesteps the
+Pages gzip quirk entirely and leaves the homepage with no backend dependency at
+all. Only full-text search calls the Worker, because ranked search over the review
+text needs FTS5.
 
 ## TMDB enrichment (Phase 6)
 
