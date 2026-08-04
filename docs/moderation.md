@@ -4,13 +4,39 @@ The public [`/submit`](../src/pages/submit.astro) form is the only write path in
 the archive. Submissions land in the `movie_submissions` table in D1 and appear
 nowhere on the site until you promote them by hand.
 
-> **Changed August 2026.** This used to be a login-gated admin SPA at `/admin`,
-> backed by Supabase Auth and RLS. The site moved off Supabase (the free-tier
-> project kept auto-pausing even with a working keep-alive), and D1 has no auth
-> layer, so moderation is now a handful of `wrangler` commands. The queue had
-> received zero submissions in its lifetime, so a browser UI plus an auth system
-> was a lot of surface for nothing. If volume ever justifies rebuilding it, the
-> place to do so is the Worker in `worker/`.
+There are two ways to work the queue: the **private admin page** (easiest) or
+**`wrangler` on the command line** (no password needed, works from this machine).
+
+## The admin page
+
+**https://movie-archive-api.viacrusis14.workers.dev/admin**
+
+Served by the Worker, not by the public site. That distinction matters: GitHub Pages
+serves everything it hosts to the world, so a static admin page could hide the data
+but never the page itself. Here the HTML sits behind the same check as the data.
+
+Sign in with the password stored in the Worker secret `ADMIN_PASSWORD`:
+
+```bash
+cd worker
+npx wrangler secret put ADMIN_PASSWORD --name movie-archive-api
+```
+
+**Until that secret is set, the whole `/admin` surface returns 503** — it fails
+closed on purpose, so a missing secret can never mean "let everyone in."
+
+What it does: lists submissions by status, and marks one accepted or rejected.
+Accepting **only marks the row reviewed** — it does not put the film on the site.
+See [Getting an accepted film onto the site](#getting-an-accepted-film-onto-the-site).
+
+Security model, stated plainly: one shared password, exchanged for a signed
+HttpOnly/Secure/SameSite=Strict session cookie that expires after 12 hours. Wrong
+passwords are compared in constant time and answered after a delay. There is **no
+MFA, no per-user accounts, and no revocation short of rotating the secret** — that
+is proportionate for a single moderator on a hobby archive, and not more. If it ever
+needs to be stronger, the upgrade is Cloudflare Access in front of a custom domain.
+
+## Or use the CLI
 
 Everything below runs from the `worker/` directory and needs `wrangler login` as
 the Cloudflare account that owns the `movie-archive` database.

@@ -1,3 +1,4 @@
 seed.sql
 .wrangler/
 node_modules/
+.dev.vars

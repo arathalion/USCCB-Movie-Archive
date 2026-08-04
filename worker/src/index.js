@@ -9,6 +9,10 @@
 // cacheable; the only write path is /submit, gated on a server-side Turnstile check.
 
 import { buildSelect, isResource, jsonArrayColumns, ApiError, MAX_LIMIT } from './postgrest.js';
+import {
+  loginPage, queuePage, SESSION_COOKIE, SESSION_TTL_SECONDS,
+  makeSession, verifySession, readCookie, timingSafeEqual,
+} from './admin.js';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -212,11 +216,124 @@ async function handleSubmit(request, env) {
 }
 
 // ---------------------------------------------------------------------------
+// Private admin (see admin.js for the auth model)
+
+const ADMIN_STATUSES = new Set(['pending', 'accepted', 'rejected']);
+
+// Same-origin only: no CORS headers here, and every response is no-store. The
+// admin surface is deliberately not reachable from the public site's origin.
+const adminJson = (body, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-robots-tag': 'noindex, nofollow',
+    },
+  });
+
+async function handleAdmin(request, env, path, url) {
+  // Fail CLOSED when no password is configured. An unset secret must never mean
+  // "let everyone in" — that is precisely how /submit stayed open unnoticed.
+  const password = env.ADMIN_PASSWORD;
+  if (!password) {
+    return new Response(
+      'Admin is disabled: ADMIN_PASSWORD is not set.\n' +
+      'Set it with:  wrangler secret put ADMIN_PASSWORD --name movie-archive-api\n',
+      { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } }
+    );
+  }
+
+  // --- login / logout ---
+  if (path === '/admin/login' && request.method === 'POST') {
+    const form = await request.formData().catch(() => null);
+    const supplied = form?.get('password');
+    if (typeof supplied !== 'string' || !timingSafeEqual(supplied, password)) {
+      // Blunt the guessing rate a little; Workers bills wall-clock, not CPU, for this.
+      await new Promise((r) => setTimeout(r, 700));
+      return loginPage('Incorrect password.');
+    }
+    const session = await makeSession(password);
+    return new Response(null, {
+      status: 303,
+      headers: {
+        location: `${url.origin}/admin`,
+        'cache-control': 'no-store',
+        'set-cookie': `${SESSION_COOKIE}=${session}; Path=/admin; HttpOnly; Secure; ` +
+          `SameSite=Strict; Max-Age=${SESSION_TTL_SECONDS}`,
+      },
+    });
+  }
+
+  if (path === '/admin/logout' && request.method === 'POST') {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'cache-control': 'no-store',
+        'set-cookie': `${SESSION_COOKIE}=; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=0`,
+      },
+    });
+  }
+
+  const authed = await verifySession(readCookie(request, SESSION_COOKIE), password);
+
+  if (path === '/admin') {
+    if (request.method !== 'GET') return adminJson({ message: 'method not allowed' }, 405);
+    return authed ? queuePage() : loginPage(null);
+  }
+
+  // Everything past here is data and must be authenticated.
+  if (!authed) return adminJson({ message: 'unauthorized' }, 401);
+
+  if (path === '/admin/submissions' && request.method === 'GET') {
+    const status = url.searchParams.get('status') || 'pending';
+    const base =
+      `SELECT id, created_at, title, year, usccb_code, mpaa_rating, explanation,
+              source_url, submitter_name, status, reviewed_at
+         FROM movie_submissions`;
+    const stmt = status === 'all'
+      ? env.DB.prepare(`${base} ORDER BY created_at DESC`)
+      : env.DB.prepare(`${base} WHERE status = ? ORDER BY created_at DESC`).bind(status);
+    const { results } = await stmt.all();
+    return adminJson(results ?? []);
+  }
+
+  const one = path.match(/^\/admin\/submissions\/(\d+)$/);
+  if (one && request.method === 'POST') {
+    const body = await request.json().catch(() => null);
+    const next = body?.status;
+    if (!ADMIN_STATUSES.has(next)) {
+      return adminJson({ message: `status must be one of ${[...ADMIN_STATUSES].join(', ')}` }, 400);
+    }
+    const res = await env.DB.prepare(
+      `UPDATE movie_submissions
+          SET status = ?, reviewed_at = datetime('now'), reviewer = 'admin'
+        WHERE id = ?`
+    ).bind(next, Number(one[1])).run();
+    if (!res.meta?.changes) return adminJson({ message: 'no such submission' }, 404);
+    return adminJson({ ok: true });
+  }
+
+  return adminJson({ message: `no route for ${path}` }, 404);
+}
+
+// ---------------------------------------------------------------------------
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '') || '/';
+
+    // Admin is checked before the CORS preflight branch: it is same-origin only
+    // and must never advertise itself as cross-origin callable.
+    if (path === '/admin' || path.startsWith('/admin/')) {
+      try {
+        return await handleAdmin(request, env, path, url);
+      } catch (e) {
+        console.error('admin', e);
+        return new Response('internal error', { status: 500, headers: { 'cache-control': 'no-store' } });
+      }
+    }
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });

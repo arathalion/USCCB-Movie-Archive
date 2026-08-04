@@ -133,9 +133,17 @@ cd worker && npx wrangler secret put TURNSTILE_SECRET   # from dash.cloudflare.c
 # then set PUBLIC_TURNSTILE_SITE_KEY in .env and as a repo variable
 ```
 
-Review the queue with `wrangler`; there is no admin UI (the login-gated `/admin` SPA was
-removed with the Supabase migration — D1 has no auth layer, and the queue had taken zero
-submissions in its lifetime):
+Review the queue at the **private admin page**, served by the Worker (not the public
+site, which would be world-readable):
+
+**https://movie-archive-api.viacrusis14.workers.dev/admin**
+
+It is gated on the `ADMIN_PASSWORD` Worker secret and **returns 503 until that secret is
+set** — it fails closed by design. One shared password → a signed, HttpOnly, 12-hour
+session cookie; no MFA and no per-user accounts, which is proportionate for one moderator
+and no more. Details in [`docs/moderation.md`](docs/moderation.md).
+
+Or from the command line:
 
 ```bash
 cd worker
