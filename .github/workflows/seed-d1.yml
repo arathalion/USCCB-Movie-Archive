@@ -1,9 +1,14 @@
 name: Re-seed D1
 
 # data/ is canonical; D1 is a derived serving copy that backs the public API.
-# Merging a film addition rebuilds the static site, but without this the API
-# would keep serving the old data until someone re-seeded by hand — the exact
-# drift docs/moderation.md warns about. This keeps them in step automatically.
+# Merging a film addition rebuilds the static site, but without this the API would
+# keep serving the old data until someone re-seeded by hand — the exact drift
+# docs/moderation.md warns about.
+#
+# On push it applies ONLY the rows in data/additions/ (usually one film). A full
+# 17 MB re-seed to add a single row takes D1 offline for the duration of the
+# import and is prone to D1_RESET_DO; run that deliberately via workflow_dispatch
+# with full_reseed=true when the base data actually changes.
 
 on:
   push:
@@ -12,10 +17,16 @@ on:
       - 'data/**'
       - 'worker/schema.sql'
       - 'scripts/build_d1_seed.mjs'
+      - 'scripts/build_d1_delta.mjs'
   workflow_dispatch:
+    inputs:
+      full_reseed:
+        description: 'Rebuild the whole database from data/ (drops and recreates content tables)'
+        type: boolean
+        default: false
 
-# Never let two seeds overlap — the seed drops and recreates the content tables,
-# and interleaving them would leave the API serving a half-built database.
+# Never let two runs overlap — a full re-seed drops and recreates the content
+# tables, and interleaving would leave the API serving a half-built database.
 concurrency:
   group: seed-d1
   cancel-in-progress: false
@@ -32,31 +43,63 @@ jobs:
         with:
           node-version: 26
 
-      - name: Build the seed from data/
-        run: node scripts/build_d1_seed.mjs
+      - name: Decide what to apply
+        id: mode
+        run: |
+          if [ "${{ inputs.full_reseed }}" = "true" ]; then
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "full=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build SQL
+        run: |
+          if [ "${{ steps.mode.outputs.full }}" = "true" ]; then
+            node scripts/build_d1_seed.mjs
+            cp worker/seed.sql worker/apply.sql
+          else
+            node scripts/build_d1_delta.mjs
+            cp worker/delta.sql worker/apply.sql
+          fi
+          echo "--- statements to apply ---"
+          grep -c ';' worker/apply.sql || true
 
       - name: Apply to D1
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
+          set -euo pipefail
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
             echo "::error::CLOUDFLARE_API_TOKEN is not set — add it under Settings → Secrets and variables → Actions."
             exit 1
           fi
+          if ! grep -q ';' worker/apply.sql; then
+            echo "Nothing to apply (no additions)."
+            exit 0
+          fi
           cd worker
-          npx --yes wrangler@4 d1 execute movie-archive --remote --yes --file=seed.sql
+          # D1 imports occasionally fail with D1_RESET_DO; the DB rolls back, so a
+          # retry is safe and the SQL is written to be idempotent regardless.
+          for attempt in 1 2 3; do
+            if npx --yes wrangler@4 d1 execute movie-archive --remote --yes --file=apply.sql; then
+              echo "applied on attempt $attempt"; exit 0
+            fi
+            echo "::warning::attempt $attempt failed; retrying in 20s"
+            sleep 20
+          done
+          echo "::error::D1 apply failed after 3 attempts"
+          exit 1
 
-      - name: Verify the API sees the new data
+      - name: Verify the API
         run: |
           set -euo pipefail
-          # The seed drops and recreates content tables; confirm the row count is
-          # sane rather than trusting a zero-row success.
           n=$(curl -sf "https://movie-archive-api.viacrusis14.workers.dev/rest/v1/public_movies_api?select=id&limit=1" \
                 -H "Prefer: count=exact" -H "Range: 0-0" -D- -o /dev/null \
               | tr -d '\r' | grep -i '^content-range' | sed 's|.*/||')
           echo "API reports $n films"
+          # Guards against a half-populated database passing silently.
           if [ "${n:-0}" -lt 13000 ]; then
-            echo "::error::Only $n films visible after re-seed — expected 13,000+. D1 may be half-populated."
+            echo "::error::Only $n films visible — expected 13,000+. D1 may be half-populated; re-run with full_reseed=true."
             exit 1
           fi

@@ -1,4 +1,6 @@
 seed.sql
+delta.sql
+apply.sql
 .wrangler/
 node_modules/
 .dev.vars
