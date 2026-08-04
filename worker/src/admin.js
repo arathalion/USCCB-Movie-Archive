@@ -116,7 +116,7 @@ export function loginPage(error) {
 <title>Sign in · Archive admin</title><style>${PAGE_CSS}</style></head><body><div class="wrap">
 <h1>Archive admin</h1>
 <p class="sub">Moderation queue for the USCCB Movie Reviews Archive.</p>
-<form class="login" method="POST" action="login">
+<form class="login" method="POST" action="/admin/login">
   <label for="pw">Password</label>
   <input type="password" id="pw" name="password" autocomplete="current-password" autofocus required>
   <p style="margin:.75rem 0 0"><button type="submit">Sign in</button></p>
@@ -191,7 +191,7 @@ function card(s) {
 
 async function load() {
   listEl.innerHTML = '<p class="empty">Loading&hellip;</p>';
-  const r = await fetch('submissions?status=' + encodeURIComponent(statusEl.value),
+  const r = await fetch('/admin/submissions?status=' + encodeURIComponent(statusEl.value),
                         { credentials: 'same-origin' });
   if (r.status === 401) { location.reload(); return; }
   if (!r.ok) { listEl.innerHTML = '<p class="err">Failed to load.</p>'; return; }
@@ -205,7 +205,7 @@ listEl.addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-id]');
   if (!b) return;
   b.disabled = true;
-  const r = await fetch('submissions/' + b.dataset.id, {
+  const r = await fetch('/admin/submissions/' + b.dataset.id, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     credentials: 'same-origin',
@@ -217,7 +217,7 @@ listEl.addEventListener('click', async (e) => {
 
 statusEl.addEventListener('change', load);
 document.getElementById('logout').addEventListener('click', async () => {
-  await fetch('logout', { method: 'POST', credentials: 'same-origin' });
+  await fetch('/admin/logout', { method: 'POST', credentials: 'same-origin' });
   location.reload();
 });
 load();
