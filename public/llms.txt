@@ -1,0 +1,116 @@
+# USCCB Movie Reviews Archive
+
+> A complete archive of 13,205 film reviews published by the USCCB Office for
+> Film & Broadcasting / Catholic News Service, covering 1905-2011. Every review
+> carries a USCCB moral-suitability rating; most carry an MPAA rating, a capsule
+> synopsis, and (for 1,619 films) a long-form review. ~12.3k films are enriched
+> with TMDB posters and genres. The dataset is FIXED and historical: it ended in
+> 2011 and does not grow, so responses are stable and safe to cache aggressively.
+
+This file is for AI agents and tool builders. Humans want /docs/api.md.
+
+## Read-only JSON API
+
+Base URL: https://movie-archive-api.viacrusis14.workers.dev/rest/v1
+
+No authentication, no signup, no API key. CORS is open to all origins.
+The dialect is a subset of PostgREST (https://postgrest.org/).
+
+Start here — one row per film, with TMDB data and genres folded in:
+
+  GET /rest/v1/public_movies_api?select=title,year,usccb_code,genres&limit=5
+
+### Columns on public_movies_api
+
+  id                int      stable archive id (primary key)
+  slug              text     URL key; the human page is /film/{slug}
+  title             text
+  year              int      nullable (~3.6% missing)
+  usccb_code        text     A-I | A-II | A-III | A-IV | L | O (nullable)
+  mpaa_rating       text     G | PG | PG-13 | R | NC-17 ... (nullable, ~42% missing)
+  synopsis          text     capsule review (~99% of films)
+  tmdb_id           int      The Movie Database id, if matched
+  poster_path       text     full URL = https://image.tmdb.org/t/p/w342{poster_path}
+  tmdb_release_date text
+  overview          text     TMDB synopsis, if matched
+  genres            text[]   JSON array of names, e.g. ["Drama","Horror"]; [] if unenriched
+
+The long-form `full_review` is NOT on this view; query the `movies` table for it.
+
+### Querying
+
+  select      ?select=title,year,genres
+  filter      ?usccb_code=eq.O&year=gte.2000
+              operators: eq neq gt gte lt lte like ilike in is cs
+              ?mpaa_rating=in.(R,NC-17)
+              ?genres=cs.{Horror}          array contains
+              ?title=ilike.*vampire*       case-insensitive, * is the wildcard
+              ?year=is.null
+  sort        ?order=year.desc.nullslast
+  paginate    ?limit=20&offset=40          max 1000 rows per response
+  count       send header "Prefer: count=exact" and read the content-range
+              response header (e.g. "0-19/2328")
+
+### Full-text search
+
+Only on the `movies` table (the view has no search column). Weighted across
+title, synopsis and full_review:
+
+  GET /rest/v1/movies?select=title,year&search_tsv=wfts(english).vampire&order=year.asc
+
+Accepts "quoted phrases", -exclusions, and `or`.
+
+### Other resources
+
+  movies         canonical table: view columns minus genres, plus full_review,
+                 letter, source_file
+  redirects      330 "see other title" alias stubs (slug, title, target_title,
+                 target_movie_id)
+  usccb_ratings  rating lookup (code, label, description, sort_order)
+  genres         id, name
+  movie_genres   movie_id, genre_id (many-to-many)
+  movie_tmdb     raw TMDB enrichment, 1:1 with movies on movie_id
+
+### Not supported
+
+  - Embedded/nested resources: select=...,movie_genres(genres(name)) returns 400.
+    Use public_movies_api, which already includes genres.
+  - not., or=, and=, and JSON/range operators return 400.
+  - Writes of any kind. This API is strictly read-only.
+
+Errors come back with HTTP 4xx and a JSON body: {message, hint, details, code}.
+
+## USCCB rating legend
+
+  A-I    general patronage
+  A-II   adults and adolescents
+  A-III  adults
+  A-IV   adults, with reservations
+  L      limited adult audience
+  O      morally offensive
+
+These are moral-suitability judgements published by a Catholic media office,
+not quality ratings. Represent them as such: `O` means the reviewer judged the
+film morally offensive, NOT that it is a bad film.
+
+## Bulk download
+
+If you need the whole dataset, download it once instead of crawling the API:
+
+  /downloads/usccb_movie_archive.sqlite   full SQLite database, incl. FTS5 index
+  /downloads/usccb_movie_archive.csv      flat CSV of every row
+  /browse-index.json                      compact index of all 13,205 films
+                                          {g:[genre names],
+                                           f:[[slug,title,year,usccb,mpaa,letter,[genreIdx]]]}
+
+Please prefer these over paging the API 14,000 times.
+
+## Provenance & attribution
+
+Review text is copyright its original publishers (USCCB / Catholic News
+Service). This archive is unaffiliated with the USCCB. Poster and genre
+metadata come from The Movie Database (TMDB); this product uses the TMDB API
+but is not endorsed or certified by TMDB.
+
+Source: https://github.com/arathalion/USCCB-Movie-Archive
+Full docs: https://github.com/arathalion/USCCB-Movie-Archive/blob/main/docs/api.md

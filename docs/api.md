@@ -1,29 +1,47 @@
 # Public API
 
-The archive's data is available as a read-only JSON API, served by Supabase
-[PostgREST](https://postgrest.org/) directly from Postgres. It's the same
-backend the website's browse page uses — no signup, no per-user key. Just send
-the project's **public anon key** (it's already public; it ships in the site's
-JavaScript bundle) with every request.
+The archive's data is available as a read-only JSON API. It speaks the
+[PostgREST](https://postgrest.org/) query dialect — no signup, no key.
 
-> **Read-only.** The anon role can only `SELECT`. Writes are rejected. The only
-> way to add data is the moderated [`/submit`](../src/pages/submit.astro) form.
+> **Moved (August 2026).** This API used to run on Supabase. The free-tier
+> project kept auto-pausing (taking the API down with it), so it now runs on a
+> Cloudflare Worker backed by D1. **The only change callers need is the base
+> URL.** The query dialect, resource names, column names, response shapes and
+> `content-range` count header are all unchanged, and the old `apikey` /
+> `Authorization` headers are still accepted (and ignored), so existing clients
+> keep working as-is. See [Differences from PostgREST](#differences-from-postgrest).
 
-## Endpoint & auth
+> **Read-only.** Writes are rejected. The only way to add data is the moderated
+> [`/submit`](../src/pages/submit.astro) form.
+
+## Endpoint
 
 | | |
 |---|---|
-| Base URL | `https://vjtavurzjxfjczpvtpdq.supabase.co/rest/v1` |
-| Anon key | `sb_publishable_MnMcji0ZPqJZPTn911Sg1A_KCzvBVO3` |
-
-Send the key in **both** the `apikey` and `Authorization: Bearer` headers:
+| Base URL | `https://movie-archive-api.viacrusis14.workers.dev/rest/v1` |
+| Auth | none — send nothing, or keep sending the old headers; both work |
 
 ```bash
+BASE="https://movie-archive-api.viacrusis14.workers.dev/rest/v1"
+curl "$BASE/public_movies_api?select=title,year&limit=5"
+```
+
+**Building a tool or an agent against this?** There's a machine-readable summary
+at [`/llms.txt`](../public/llms.txt) (served at the site root) covering the
+schema, operators, rating semantics, and the bulk downloads to use instead of
+crawling.
+
+<details>
+<summary>Previous (Supabase) endpoint — retired</summary>
+
+```bash
+# No longer served; the project was deleted after the migration.
 KEY="sb_publishable_MnMcji0ZPqJZPTn911Sg1A_KCzvBVO3"
 BASE="https://vjtavurzjxfjczpvtpdq.supabase.co/rest/v1"
 curl "$BASE/public_movies_api?select=title,year&limit=5" \
   -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
 ```
+</details>
 
 ## The `public_movies_api` resource
 
@@ -125,13 +143,28 @@ curl "$BASE/movies?select=title,year,movie_genres(genres(name))&id=eq.100" \
   -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
 ```
 
+## Differences from PostgREST
+
+The backend is now a hand-written translator over SQLite, not PostgREST itself.
+Everything documented above works; these are the known gaps:
+
+| Behaviour | Status |
+|---|---|
+| `select`, `eq` `neq` `gt` `gte` `lt` `lte` `in` `is` `ilike` `cs`, `order` (incl. `nullsfirst`/`nullslast`), `limit`, `offset`, `Range`, `Prefer: count=exact` | ✅ identical |
+| `search_tsv=wfts(english).…` | ✅ same syntax (quoted phrases, `-exclude`, `or`); ranking is FTS5 bm25 rather than a weighted tsvector, so *result order within equal relevance* can differ |
+| **Embedded resources** — `select=…,movie_genres(genres(name))` | ❌ not supported; returns a 400. Use `public_movies_api`, which already includes `genres`, or fetch the related resource separately |
+| `like` (case-sensitive) | ⚠️ implemented with SQLite `GLOB`. `*` works as documented; `?` means "any single character" |
+| `not.`, `or=`, `and=`, range/JSON operators | ❌ not supported; returns a 400 naming the supported operators |
+| Unknown column or resource | ✅ 400/404 with a PostgREST-shaped error body (`message`, `hint`, `details`, `code`) |
+
 ## Limits & etiquette
 
 - Responses return at most **1,000 rows**; page with `limit`/`offset` and use the
   `count=exact` header for totals.
-- This is a small hobby archive on Supabase's free tier — please be gentle
+- This is a small hobby archive on Cloudflare's free tier — please be gentle
   (cache results, avoid hammering). It's a fixed historical dataset
-  (1905–2011), so responses rarely change.
+  (1905–2011), so responses rarely change; they are served with
+  `cache-control: max-age=300, s-maxage=86400`.
 
 ## USCCB rating legend
 
