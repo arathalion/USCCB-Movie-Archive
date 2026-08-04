@@ -199,13 +199,13 @@ async function handleSubmit(request, env) {
 
   await env.DB.prepare(
     `INSERT INTO movie_submissions
-       (title, year, usccb_code, mpaa_rating, synopsis, full_review, submitter, note)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (title, year, usccb_code, mpaa_rating, explanation, source_url, submitter_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     title, year,
-    trim(body.usccb_code, 10), trim(body.mpaa_rating, 10),
-    trim(body.synopsis, 5000), trim(body.full_review, 50000),
-    trim(body.submitter, 200), trim(body.note, 2000)
+    trim(body.usccb_code, 10), trim(body.mpaa_rating, 20),
+    trim(body.explanation, 5000), trim(body.source_url, 2000),
+    trim(body.submitter_name, 120)
   ).run();
 
   return json({ ok: true }, { headers: { 'cache-control': 'no-store' } });

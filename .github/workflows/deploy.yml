@@ -38,14 +38,14 @@ jobs:
           # base path from the repo name so asset/range-request URLs are correct.
           # For a user/root site or custom domain, set this to "/".
           BASE_PATH: /${{ github.event.repository.name }}/
-          # Canonical data is read from Supabase Postgres at build time. These are
-          # the public anon/publishable values (no secret); add them as repo secrets
-          # under Settings → Secrets and variables → Actions.
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          # Same public values, exposed to the browser for the /query page.
-          PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          # Page data is built from the NDJSON dumps committed in data/ — the
+          # build needs no network and no credentials.
+          #
+          # The live API (browse full-text search, /query, /submit) is the
+          # Cloudflare Worker in worker/. Set PUBLIC_API_BASE as a repo variable
+          # to the deployed Worker URL, e.g.
+          #   https://movie-archive-api.<subdomain>.workers.dev
+          PUBLIC_API_BASE: ${{ vars.PUBLIC_API_BASE }}
           # Cloudflare Turnstile site key for the /submit form (public value).
           # If the secret is unset, submit.astro falls back to Cloudflare's test
           # key; set TURNSTILE_SITE_KEY as a repo secret to use a real widget.

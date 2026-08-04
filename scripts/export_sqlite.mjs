@@ -12,54 +12,26 @@
 //   public/downloads/usccb_movie_archive.csv    (download)
 
 import { DatabaseSync } from 'node:sqlite';
-import { createClient } from '@supabase/supabase-js';
 import { mkdirSync, rmSync, renameSync, copyFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-
-if (!process.env.SUPABASE_URL) {
-  try { process.loadEnvFile(join(process.cwd(), '.env')); } catch {}
-}
-const url = process.env.SUPABASE_URL;
-const key = process.env.SUPABASE_ANON_KEY;
-if (!url || !key) {
-  console.error('Missing SUPABASE_URL / SUPABASE_ANON_KEY (set them in .env).');
-  process.exit(1);
-}
+import { getMovies, getRedirects } from '../src/lib/db.js';
 
 const root = process.cwd();
-const supabase = createClient(url, key, { auth: { persistSession: false } });
 
 // The legacy `reviews` table held ALL rows (real films + redirect stubs) with an
-// is_redirect flag. Postgres now keeps those apart (movies + redirects tables), so
-// rebuild the combined set here: real films (is_redirect=0) + the stubs
-// (is_redirect=1), ordered by id. Keeps the public download byte-compatible.
-const PAGE = 1000;
-async function fetchAll(table, cols) {
-  const out = [];
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
-      .from(table).select(cols).order('id', { ascending: true }).range(from, from + PAGE - 1);
-    if (error) { console.error(`Supabase read failed (${table}):`, error.message); process.exit(1); }
-    out.push(...data);
-    if (data.length < PAGE) break;
-  }
-  return out;
-}
+// is_redirect flag. The dumps keep those apart (movies + redirects), so rebuild
+// the combined set here: real films (is_redirect=0) + the stubs (is_redirect=1),
+// ordered by id. Keeps the public download byte-compatible.
+const films = getMovies().map((r) => ({ ...r, is_redirect: 0 }));
 
-const films = (await fetchAll('movies',
-  'id, slug, title, year, usccb_code, mpaa_rating, synopsis, full_review, letter, source_file'
-)).map((r) => ({ ...r, is_redirect: 0 }));
-
-const redirects = (await fetchAll('redirects',
-  'id, slug, title, synopsis, letter, source_file'
-)).map((r) => ({
+const redirects = getRedirects().map((r) => ({
   id: r.id, slug: r.slug, title: r.title, year: null, usccb_code: null,
   mpaa_rating: null, synopsis: r.synopsis, full_review: null,
   letter: r.letter, source_file: r.source_file, is_redirect: 1,
 }));
 
 const rows = [...films, ...redirects].sort((a, b) => a.id - b.id);
-console.log(`Read ${films.length} films + ${redirects.length} redirects = ${rows.length} rows from Postgres`);
+console.log(`Read ${films.length} films + ${redirects.length} redirects = ${rows.length} rows from data/`);
 
 // ---------- Build the SQLite file ----------
 const dbPath = join(root, 'public', 'movies_web.db');

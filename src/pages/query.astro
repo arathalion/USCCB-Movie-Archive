@@ -63,12 +63,8 @@ order by year;</pre>
 </Base>
 
 <script>
-  import { createClient } from '@supabase/supabase-js';
+  import { apiRpc } from '../lib/api.js';
 
-  const supabase = createClient(
-    import.meta.env.PUBLIC_SUPABASE_URL,
-    import.meta.env.PUBLIC_SUPABASE_ANON_KEY
-  );
   const RENDER_CAP = 1000;
 
   const sqlEl = document.getElementById('sql');
@@ -107,9 +103,7 @@ order by year;</pre>
     statusEl.textContent = 'Running…';
     const t0 = performance.now();
     try {
-      const { data, error } = await supabase.rpc('run_read_only_sql', { query: sql });
-      if (error) throw new Error(error.message);
-      const rows = data || [];
+      const rows = (await apiRpc('run_read_only_sql', { query: sql })) || [];
       const ms = Math.round(performance.now() - t0);
       lastRows = rows;
       lastCols = rows.length ? Object.keys(rows[0]) : [];

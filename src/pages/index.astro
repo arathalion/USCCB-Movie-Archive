@@ -84,14 +84,16 @@ const GENRES = await getGenres();
 </style>
 
 <script>
-  import { createClient } from '@supabase/supabase-js';
+  // Browse runs against a static index (/browse-index.json, ~180 KB gzipped)
+  // rather than a live database: filtering, sorting and paging 13,205 rows in
+  // the browser is faster than a round-trip and keeps the homepage working even
+  // if the API is down. Only full-text search needs the Worker, because ranked
+  // search over the review text requires FTS5.
+  import { apiGet } from '../lib/api.js';
 
-  const supabase = createClient(
-    import.meta.env.PUBLIC_SUPABASE_URL,
-    import.meta.env.PUBLIC_SUPABASE_ANON_KEY
-  );
   const base = import.meta.env.BASE_URL;
   const PAGE = 100;
+  const SEARCH_CAP = 1000; // the API's documented per-response row cap
   const DEFAULT_SORT = 'title:asc';
   const SORTS = new Set(['title:asc', 'year:desc', 'year:asc', 'usccb_code:asc']);
 
@@ -125,24 +127,75 @@ const GENRES = await getGenres();
       yminEl.value || ymaxEl.value || sortEl.value !== DEFAULT_SORT);
   }
 
-  function buildQuery() {
-    // Genre lives in movie_genres → genres (M2M); filter via an inner-join embed,
-    // added only when a genre is picked so films without genres aren't excluded.
-    const cols = 'slug, title, year, usccb_code, mpaa_rating' +
-      (genreEl.value ? ', movie_genres!inner(genres!inner(name))' : '');
-    let q = supabase.from('movies').select(cols, { count: 'exact' });
-    const text = qEl.value.trim();
-    if (text) q = q.textSearch('search_tsv', text, { type: 'websearch', config: 'english' });
-    if (usccbEl.value) q = q.eq('usccb_code', usccbEl.value);
-    if (mpaaEl.value) q = q.eq('mpaa_rating', mpaaEl.value);
-    if (genreEl.value) q = q.eq('movie_genres.genres.name', genreEl.value);
-    if (letter) q = q.eq('letter', letter);
-    if (yminEl.value) q = q.gte('year', Number(yminEl.value));
-    if (ymaxEl.value) q = q.lte('year', Number(ymaxEl.value));
+  // ---- The static index ----
+  // Wire format: { g: [genreName…], f: [[slug,title,year,usccb,mpaa,letter,[genreIdx…]]…] }
+  const S = 0, T = 1, Y = 2, U = 3, M = 4, L = 5, G = 6;
+  let INDEX = null;
+  let indexPromise = null;
+
+  function loadIndex() {
+    if (!indexPromise) {
+      indexPromise = fetch(`${base}browse-index.json`)
+        .then((r) => {
+          if (!r.ok) throw new Error(`browse index failed (${r.status})`);
+          return r.json();
+        })
+        .then((d) => { INDEX = d; return d; });
+    }
+    return indexPromise;
+  }
+
+  // Full-text search is the one thing the local index can't do — it holds no
+  // review text. Ask the Worker for matching slugs and intersect.
+  async function searchSlugs(text) {
+    const rows = await apiGet('movies', {
+      select: 'slug',
+      search_tsv: `wfts(english).${text}`,
+      limit: String(SEARCH_CAP),
+    });
+    return new Set(rows.map((r) => r.slug));
+  }
+
+  const USCCB_RANK = { 'A-I': 1, 'A-II': 2, 'A-III': 3, 'A-IV': 4, L: 5, O: 6 };
+
+  // Nulls always sort last, matching the old `nullsFirst: false` ordering.
+  function comparator(key, dir) {
+    const sign = dir === 'asc' ? 1 : -1;
+    const byTitle = (a, b) => String(a[T]).localeCompare(String(b[T]));
+    if (key === 'title') return (a, b) => sign * byTitle(a, b);
+    if (key === 'year') {
+      return (a, b) => {
+        if (a[Y] == null && b[Y] == null) return byTitle(a, b);
+        if (a[Y] == null) return 1;
+        if (b[Y] == null) return -1;
+        return sign * (a[Y] - b[Y]) || byTitle(a, b);
+      };
+    }
+    return (a, b) => { // usccb_code
+      const ra = USCCB_RANK[a[U]] ?? Infinity, rb = USCCB_RANK[b[U]] ?? Infinity;
+      if (ra === Infinity && rb === Infinity) return byTitle(a, b);
+      return sign * (ra - rb) || byTitle(a, b);
+    };
+  }
+
+  function selectRows(slugSet) {
+    const genreIdx = genreEl.value ? INDEX.g.indexOf(genreEl.value) : -1;
+    const ymin = yminEl.value ? Number(yminEl.value) : null;
+    const ymax = ymaxEl.value ? Number(ymaxEl.value) : null;
+
+    const rows = INDEX.f.filter((r) => {
+      if (slugSet && !slugSet.has(r[S])) return false;
+      if (usccbEl.value && r[U] !== usccbEl.value) return false;
+      if (mpaaEl.value && r[M] !== mpaaEl.value) return false;
+      if (genreIdx !== -1 && !r[G].includes(genreIdx)) return false;
+      if (letter && r[L] !== letter) return false;
+      if (ymin !== null && (r[Y] == null || r[Y] < ymin)) return false;
+      if (ymax !== null && (r[Y] == null || r[Y] > ymax)) return false;
+      return true;
+    });
+
     const [col, dir] = sortEl.value.split(':');
-    q = q.order(col, { ascending: dir === 'asc', nullsFirst: false });
-    if (col !== 'title') q = q.order('title', { ascending: true }); // stable secondary sort
-    return q;
+    return rows.sort(comparator(col, dir));
   }
 
   // ---- Shareable URL state (read on load / back-forward, write on every change) ----
@@ -179,42 +232,59 @@ const GENRES = await getGenres();
       b.classList.toggle('active', (b.dataset.letter || '') === letter));
   }
 
-  function rowHtml(f) {
-    const usccb = f.usccb_code
-      ? `<span class="chip usccb" role="button" tabindex="0" data-usccb="${esc(f.usccb_code)}" ` +
-        `title="Filter by ${esc(f.usccb_code)} — ${esc(USCCB_TT[f.usccb_code] || '')}">${esc(f.usccb_code)}</span>`
+  function rowHtml(r) {
+    const usccb = r[U]
+      ? `<span class="chip usccb" role="button" tabindex="0" data-usccb="${esc(r[U])}" ` +
+        `title="Filter by ${esc(r[U])} — ${esc(USCCB_TT[r[U]] || '')}">${esc(r[U])}</span>`
       : '';
-    const mpaa = f.mpaa_rating
-      ? `<span class="chip" role="button" tabindex="0" data-mpaa="${esc(f.mpaa_rating)}" ` +
-        `title="Filter by ${esc(f.mpaa_rating)}">${esc(f.mpaa_rating)}</span>`
+    const mpaa = r[M]
+      ? `<span class="chip" role="button" tabindex="0" data-mpaa="${esc(r[M])}" ` +
+        `title="Filter by ${esc(r[M])}">${esc(r[M])}</span>`
       : '';
-    return `<li><span class="title"><a href="${base}film/${esc(f.slug)}">${esc(f.title)}</a></span>` +
+    return `<li><span class="title"><a href="${base}film/${esc(r[S])}">${esc(r[T])}</a></span>` +
       `<span class="chip-row">${usccb}${mpaa}</span>` +
-      `<span class="year">${f.year ?? '—'}</span></li>`;
+      `<span class="year">${r[Y] ?? '—'}</span></li>`;
   }
+
+  let matches = [];   // current result set (whole thing, not a page)
+  let truncated = false;
 
   async function load(reset) {
     if (loading) return;
     loading = true;
-    if (reset) {
-      offset = 0;
-      listEl.innerHTML = '';
-      countEl.textContent = 'Searching…';
-      resetEl.hidden = !hasFilters();
-      syncUrl();
-    }
     try {
-      const { data, count, error } = await buildQuery().range(offset, offset + PAGE - 1);
-      if (error) throw error;
-      if (count != null) total = count;
-      listEl.insertAdjacentHTML('beforeend', data.map(rowHtml).join(''));
-      offset += data.length;
+      if (reset) {
+        offset = 0;
+        listEl.innerHTML = '';
+        countEl.textContent = 'Searching…';
+        resetEl.hidden = !hasFilters();
+        syncUrl();
+
+        await loadIndex();
+        const text = qEl.value.trim();
+        let slugSet = null;
+        if (text) {
+          slugSet = await searchSlugs(text);
+          truncated = slugSet.size >= SEARCH_CAP;
+        } else {
+          truncated = false;
+        }
+        matches = selectRows(slugSet);
+        total = matches.length;
+      }
+
+      const slice = matches.slice(offset, offset + PAGE);
+      listEl.insertAdjacentHTML('beforeend', slice.map(rowHtml).join(''));
+      offset += slice.length;
       moreEl.hidden = offset >= total;
       countEl.textContent =
-        `${total.toLocaleString()} film${total === 1 ? '' : 's'}` +
-        (offset < total ? ` — showing ${offset.toLocaleString()}` : '');
+        `${total.toLocaleString()}${truncated ? '+' : ''} film${total === 1 ? '' : 's'}` +
+        (offset < total ? ` — showing ${offset.toLocaleString()}` : '') +
+        (truncated ? ` (search capped at ${SEARCH_CAP.toLocaleString()} matches)` : '');
     } catch (e) {
-      countEl.textContent = 'Search failed.';
+      countEl.textContent = qEl.value.trim()
+        ? 'Search is unavailable right now — try clearing the search box to browse.'
+        : 'Could not load the archive index.';
       console.error(e);
     } finally {
       loading = false;

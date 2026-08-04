@@ -113,19 +113,19 @@ LEFT JOIN movie_tmdb t ON t.movie_id = m.id;
 -- Public submissions. Written only by the Worker's /submit endpoint after a
 -- server-side Turnstile check — the same rule the Supabase Edge Function
 -- enforced, carried over so the captcha can't be bypassed from the browser.
+-- Column names mirror the /submit form fields exactly (src/pages/submit.astro).
 CREATE TABLE IF NOT EXISTS movie_submissions (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  title        TEXT NOT NULL,
-  year         INTEGER,
-  usccb_code   TEXT,
-  mpaa_rating  TEXT,
-  synopsis     TEXT,
-  full_review  TEXT,
-  submitter    TEXT,
-  note         TEXT,
-  status       TEXT NOT NULL DEFAULT 'pending',
-  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-  reviewed_at  TEXT,
-  reviewer     TEXT
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  title          TEXT NOT NULL,
+  year           INTEGER,
+  usccb_code     TEXT,
+  mpaa_rating    TEXT,
+  explanation    TEXT,
+  source_url     TEXT,
+  submitter_name TEXT,
+  status         TEXT NOT NULL DEFAULT 'pending',
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  reviewed_at    TEXT,
+  reviewer       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_submissions_status ON movie_submissions(status, created_at);

@@ -1,76 +1,113 @@
-// Build-time data access against Supabase Postgres — the canonical source of truth.
-// (Replaces the previous node:sqlite reader.) Uses the public anon/publishable key
-// and only reads public-read tables, so no secret is needed in the build or CI.
-import { createClient } from '@supabase/supabase-js';
+// Build-time data access. Reads the NDJSON dumps in data/ — the canonical source
+// since the site moved off Supabase. (Postgres was canonical until the free-tier
+// project began pausing unpredictably; scripts/dump_from_postgres.mjs produced
+// these files.) Everything here runs at build time only; nothing ships to the client.
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Load .env locally when the vars aren't already in the environment (CI/Actions
-// sets them directly). Node >= 20.12 provides process.loadEnvFile.
-if (!process.env.SUPABASE_URL) {
+// Resolved from the working directory, not import.meta.url: Astro bundles this
+// module into dist/.prerender/ before running getStaticPaths, so a module-relative
+// path points at the wrong place during the build. Both `astro build` and the
+// scripts/ entry points run from the project root.
+const DATA = join(process.cwd(), 'data');
+
+// 14 MB of movies.ndjson is parsed once and reused — getStaticPaths, the browse
+// index and the SQLite export all pull from the same cache.
+const cache = new Map();
+
+function load(name) {
+  if (cache.has(name)) return cache.get(name);
+  let text;
   try {
-    process.loadEnvFile(join(process.cwd(), '.env'));
-  } catch {
-    /* no .env file — rely on the ambient environment */
+    text = readFileSync(join(DATA, `${name}.ndjson`), 'utf8');
+  } catch (e) {
+    throw new Error(
+      `Missing data/${name}.ndjson — run "node scripts/dump_from_postgres.mjs" ` +
+      `or restore it from git. (${e.code})`
+    );
   }
+  const rows = text.split('\n').filter(Boolean).map((line, i) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      throw new Error(`data/${name}.ndjson: malformed JSON on line ${i + 1}`);
+    }
+  });
+  cache.set(name, rows);
+  return rows;
 }
 
-const url = process.env.SUPABASE_URL;
-const key = process.env.SUPABASE_ANON_KEY;
-if (!url || !key) {
-  throw new Error(
-    'Missing SUPABASE_URL / SUPABASE_ANON_KEY. Copy .env.example to .env (the values are public).'
-  );
+export function getMovies() { return load('movies'); }
+export function getRedirects() { return load('redirects'); }
+export function getUsccbRatings() { return load('usccb_ratings'); }
+
+// Distinct genre names (for the browse-page genre filter), alphabetised.
+export function getGenres() {
+  return load('genres').map((g) => g.name).sort((a, b) => a.localeCompare(b));
 }
 
-const supabase = createClient(url, key, { auth: { persistSession: false } });
-
-const PAGE = 1000; // PostgREST caps each response at 1000 rows
-
-// Fetch every movie row for the given columns, paginating by id (a stable unique
-// key) so the range windows can't skip or duplicate across ties. (Redirect stubs
-// live in their own `redirects` table now, so `movies` is all real films.)
-async function fetchAllMovies(columns) {
-  const out = [];
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
-      .from('movies')
-      .select(columns)
-      .order('id', { ascending: true })
-      .range(from, from + PAGE - 1);
-    if (error) throw new Error(`Supabase read failed: ${error.message}`);
-    out.push(...data);
-    if (data.length < PAGE) break;
+// movie_id -> { tmdb fields }, and movie_id -> [genre names]. Built once and
+// shared, so the joins below stay linear rather than scanning per film.
+function buildLookups() {
+  if (cache.has('__lookups')) return cache.get('__lookups');
+  const tmdb = new Map(load('movie_tmdb').map((t) => [t.movie_id, t]));
+  const genreById = new Map(load('genres').map((g) => [g.id, g.name]));
+  const genres = new Map();
+  for (const { movie_id, genre_id } of load('movie_genres')) {
+    const name = genreById.get(genre_id);
+    if (!name) continue;
+    const list = genres.get(movie_id);
+    if (list) list.push(name);
+    else genres.set(movie_id, [name]);
   }
+  for (const list of genres.values()) list.sort();
+  const out = { tmdb, genres };
+  cache.set('__lookups', out);
   return out;
 }
 
-// Distinct genre names (for the browse-page genre filter), alphabetised.
-export async function getGenres() {
-  const { data, error } = await supabase
-    .from('genres')
-    .select('name')
-    .order('name', { ascending: true });
-  if (error) throw new Error(`Supabase read failed: ${error.message}`);
-  return data.map((g) => g.name);
-}
-
 // Full detail rows for static page generation (one page per non-redirect film).
-// TMDB fields (poster_path, tmdb_id, overview) and embedded genres are null/empty
-// until the Phase 6 enrichment (scripts/apply_tmdb.mjs) has run.
-export async function getFilmsForDetail() {
-  const rows = await fetchAllMovies(
-    'id, slug, title, year, usccb_code, mpaa_rating, synopsis, full_review, ' +
-      'movie_tmdb(tmdb_id, poster_path, overview), movie_genres(genres(name))'
-  );
-  // Flatten the 1:1 movie_tmdb child and the embedded genres into plain fields.
-  return rows.map(({ movie_tmdb, movie_genres, ...film }) => {
-    const tmdb = Array.isArray(movie_tmdb) ? movie_tmdb[0] : movie_tmdb;
+// Same shape the Supabase version returned, so film/[slug].astro is unchanged.
+export function getFilmsForDetail() {
+  const { tmdb, genres } = buildLookups();
+  return getMovies().map((film) => {
+    const t = tmdb.get(film.id);
     return {
-      ...film,
-      tmdb_id: tmdb?.tmdb_id ?? null,
-      poster_path: tmdb?.poster_path ?? null,
-      overview: tmdb?.overview ?? null,
-      genres: (movie_genres || []).map((mg) => mg.genres?.name).filter(Boolean).sort(),
+      id: film.id,
+      slug: film.slug,
+      title: film.title,
+      year: film.year,
+      usccb_code: film.usccb_code,
+      mpaa_rating: film.mpaa_rating,
+      synopsis: film.synopsis,
+      full_review: film.full_review,
+      tmdb_id: t?.tmdb_id ?? null,
+      poster_path: t?.poster_path ?? null,
+      overview: t?.overview ?? null,
+      genres: genres.get(film.id) ?? [],
     };
   });
+}
+
+// Compact index shipped to the browser for live browse/filter/sort. Positional
+// arrays and genre indices rather than objects with repeated keys: the whole
+// 13,205-film index lands around 180 KB gzipped, so the browse page filters
+// locally with no network round-trip per keystroke.
+//
+// Wire format: { g: [genreName…], f: [[slug, title, year, usccb, mpaa, letter, [genreIdx…]]…] }
+// Nulls are preserved as null (year and both ratings are frequently absent).
+export function getBrowseIndex() {
+  const { genres } = buildLookups();
+  const g = getGenres();
+  const genreIdx = new Map(g.map((name, i) => [name, i]));
+  const f = getMovies().map((m) => [
+    m.slug,
+    m.title,
+    m.year ?? null,
+    m.usccb_code ?? null,
+    m.mpaa_rating ?? null,
+    m.letter ?? null,
+    (genres.get(m.id) ?? []).map((name) => genreIdx.get(name)).filter((i) => i !== undefined),
+  ]);
+  return { g, f };
 }

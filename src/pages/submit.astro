@@ -98,12 +98,7 @@ const SITE_KEY = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY || '1x000000000000000
 </style>
 
 <script>
-  import { createClient } from '@supabase/supabase-js';
-
-  const supabase = createClient(
-    import.meta.env.PUBLIC_SUPABASE_URL,
-    import.meta.env.PUBLIC_SUPABASE_ANON_KEY
-  );
+  import { API_BASE } from '../lib/api.js';
 
   const form = document.getElementById('submit-form') as HTMLFormElement;
   const btn = document.getElementById('submit-btn') as HTMLButtonElement;
@@ -142,8 +137,10 @@ const SITE_KEY = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY || '1x000000000000000
     btn.disabled = true;
     statusEl.textContent = 'Sending…';
     try {
-      const { data, error } = await supabase.functions.invoke('submit-movie', {
-        body: {
+      const res = await fetch(`${API_BASE}/submit`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
           title: val('title'),
           year: val('year') || null,
           usccb_code: val('usccb_code') || null,
@@ -151,22 +148,11 @@ const SITE_KEY = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY || '1x000000000000000
           explanation: val('explanation') || null,
           source_url: val('source_url') || null,
           submitter_name: val('submitter_name') || null,
-          turnstileToken: token,
-        },
+          token,
+        }),
       });
-      // functions.invoke surfaces non-2xx as `error`; the body may carry a message.
-      if (error) {
-        let msg = error.message;
-        try {
-          const ctx = (error as any).context;
-          if (ctx && typeof ctx.json === 'function') {
-            const j = await ctx.json();
-            if (j?.error) msg = j.error;
-          }
-        } catch { /* fall back to error.message */ }
-        throw new Error(msg);
-      }
-      if (data && (data as any).error) throw new Error((data as any).error);
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || `Submission failed (${res.status})`);
 
       form.reset();
       successEl.hidden = false;
