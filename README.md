@@ -1,117 +1,141 @@
 # USCCB Movie Reviews Archive
 
-An archive of **13,205 USCCB / Catholic News Service movie reviews** (coverage
-**1905–2011**). The public site is built with **Astro** and deployed to **GitHub
-Pages**. The canonical data lives in **`data/*.ndjson`, committed to this repo**;
-detail pages are pre-rendered from it at build time, so the build needs no network
-and no credentials. Full-text search, the `/query` SQL editor, `/submit`, and the
-public API are served by a **Cloudflare Worker backed by D1** (`worker/`).
+An archive of **13,205 film reviews** published by the USCCB Office for Film &
+Broadcasting / Catholic News Service, covering **1905–2011**. Every review carries a
+USCCB moral-suitability rating; most carry an MPAA rating and a capsule synopsis, and
+1,619 carry a long-form review. ~12.3k films are enriched with TMDB posters and genres.
 
-> **Moved off Supabase, August 2026.** The free-tier project kept auto-pausing —
-> and not for lack of traffic: a keep-alive had been pinging it successfully for
-> weeks, and it still paused 4 days after a verified database read, twice. Once
-> paused, Supabase withdraws the project's DNS record, so the keep-alive could not
-> even reach it to recover. Postgres was replaced by committed NDJSON (for the
-> build) plus D1 (for the live API), neither of which can pause.
+It is a **fixed historical dataset** — it ended in 2011 and does not grow, apart from
+occasional moderated corrections.
+
+**Live site:** https://arathalion.github.io/USCCB-Movie-Archive/
+**Public API:** https://movie-archive-api.viacrusis14.workers.dev/rest/v1
+
+## Architecture in one paragraph
+
+The site is **Astro, statically built, on GitHub Pages**. The canonical data is
+`data/*.ndjson`, **committed to this repo** — so the build needs no network, no database
+and no credentials. A **Cloudflare Worker backed by D1** (`worker/`) serves the three
+things a static file tree genuinely cannot: ranked full-text search, the `/query` SQL
+editor, and `/submit`. It also serves the public read-only API.
+
+> **Moved off Supabase, August 2026.** The free-tier project kept auto-pausing — and not
+> for lack of traffic. A keep-alive had been pinging it successfully for weeks, and it
+> still paused **4 days after a verified database read, twice**. Once paused, Supabase
+> withdraws the project's DNS record, so the keep-alive could not even reach it to
+> recover; every outage needed a human. Postgres was replaced by committed NDJSON (for
+> the build) and D1 (for the live API), neither of which pauses.
 >
-> The public API kept its contract: same query dialect, resource names, response
-> shapes and `content-range` count header, and the old `apikey`/`Authorization`
-> headers are still accepted. **Callers only change the base URL.** See
+> **The public API kept its contract** — same query dialect, resource and column names,
+> response shapes, and `content-range` count header, and the old `apikey`/`Authorization`
+> headers are still accepted. Callers only change the base URL. See
 > [`docs/api.md`](docs/api.md).
 
 ## Quick start
 
 ```bash
-npm install        # also approves esbuild/sharp install scripts if prompted
-cp .env.example .env   # values are public (anon key); fine to commit-as-template
-npm run dev        # local dev server at http://localhost:4321
-npm run build      # prebuild regenerates the SQLite/CSV exports, then static site → dist/
+npm install
+cp .env.example .env
+npm run dev        # site at http://localhost:4321
+npm run build      # prebuild regenerates SQLite/CSV exports, then static site → dist/
 npm run preview    # serve the built dist/ locally
 ```
 
-Requires **Node ≥ 24** (CI uses Node 26). The build reads Supabase at build time, so
-`SUPABASE_URL` / `SUPABASE_ANON_KEY` must be set (via `.env` locally, repo secrets in
-CI). These are the public anon/publishable values — no secret is needed to build.
+Requires **Node ≥ 24** (CI uses Node 26). The site build works offline with no
+credentials. To exercise search / `/query` / `/submit` locally, also run the API:
+
+```bash
+cd worker
+npx wrangler d1 execute movie-archive --local --file=seed.sql   # first time only
+npx wrangler dev --local                                        # http://127.0.0.1:8788
+```
+
+`seed.sql` is generated (and git-ignored): `node scripts/build_d1_seed.mjs`.
 
 ## How it works
 
-- **Source of truth:** Supabase Postgres (project `vjtavurzjxfjczpvtpdq`). The `movies`
-  table holds one row per real film (13,205), with a generated `search_tsv` tsvector for
-  full-text search. TMDB enrichment is a 1:1 `movie_tmdb` table; the 330 "see other title"
-  alias stubs are a separate `redirects` table (so `movies` needs no `is_redirect` filter).
-  Plus `usccb_ratings`, `genres`/`movie_genres`, and the submission/moderation tables.
-- **Detail pages (`/film/{slug}`)** are pre-rendered at build time — one static page
-  per non-redirect film (~13,205). `src/lib/db.js` reads Postgres with `supabase-js`
-  (anon key), paginating past PostgREST's 1000-row cap and embedding each film's genres.
-  When a film has TMDB data, the page also shows its poster, genre chips, and a TMDB link.
-- **Browse (`/`)** runs **live in the browser**: full-text `textSearch` on `search_tsv`
-  plus USCCB/MPAA/year filters, an A–Z letter bar (on the article-aware `letter` bucket),
-  sort, clickable rating chips, and "show more" pagination — all querying Supabase directly
-  with the public anon key. Filter state is reflected in the URL (`?q=&usccb=&letter=…`), so
-  any view is shareable and bookmarkable.
-- **Submit (`/submit`)** lets anyone suggest a film. The form calls the `submit-movie`
-  **Edge Function**, which verifies a Cloudflare Turnstile token server-side and inserts
-  the row (status `pending`) via the service role — direct anon INSERT is revoked, so the
-  function is the only write path. Moderators review the queue in Supabase Studio.
-- **`/query`** is a **server-side read-only SQL editor**. The browser calls the
-  `run_read_only_sql()` Postgres function (SECURITY INVOKER → anon RLS + grants apply):
-  a single `SELECT`/`WITH` only, read-only transaction, 5-second statement timeout,
-  1000-row cap. Queries hit the Postgres `movies` schema.
-- **SQLite + CSV** are **derived build artifacts**, regenerated from Postgres by
-  `scripts/export_sqlite.mjs` on every `prebuild` and shipped under `dist/downloads/`
-  for download. They are git-ignored and no longer read at runtime.
-- **URL slugs** are stored on each `movies` row (the stable, unique URL contract).
+**Data flow.** `data/*.ndjson` is canonical. Two things derive from it:
+
+```
+data/*.ndjson ──┬─→ Astro build ──→ static pages + /browse-index.json + SQLite/CSV downloads
+                └─→ build_d1_seed.mjs ──→ seed.sql ──→ D1 ──→ Worker API
+```
+
+D1 is a **derived serving copy**, not a second source of truth. A row written straight
+into D1 shows up in the API and never on the site. To add a film: edit
+`data/movies.ndjson`, re-seed D1, commit, push.
+
+**Pages.**
+
+- **`/film/{slug}`** — one static page per film (13,205), pre-rendered at build time by
+  `src/lib/db.js`. Shows poster, genre chips and a TMDB link when enriched.
+- **`/`** (browse) — fetches `/browse-index.json` (884 KB, ~257 KB gzipped) once, then
+  filters, sorts and pages **entirely in the browser**: USCCB/MPAA/genre/year filters, an
+  A–Z letter bar on the article-aware `letter` bucket, sort, clickable rating chips.
+  Filter state lives in the URL (`?q=&usccb=&letter=…`), so any view is shareable.
+  This means **the homepage has no backend dependency at all**. Only typing a search
+  query calls the Worker, because ranked search over review text needs FTS5.
+- **`/query`** — read-only SQL editor. Posts to the Worker's
+  `rpc/run_read_only_sql`, which enforces a single `SELECT`/`WITH` and a 1000-row cap.
+- **`/submit`** — public suggestion form; see below.
+
+**Downloads.** `scripts/export_sqlite.mjs` regenerates `public/movies_web.db` (legacy
+`reviews` schema + FTS5) and a flat CSV on every `prebuild`, shipped under
+`dist/downloads/`. Git-ignored; not read at runtime.
+
+**`/llms.txt`** ([`public/llms.txt`](public/llms.txt)) is a machine-readable summary for
+agents and tool builders — schema, operators, rating semantics, and a pointer to the bulk
+downloads so nobody pages the API 14,000 times.
 
 ## Project layout
 
 ```
-src/pages/                  # index (live browse), film/[slug] (static detail), query (SQL), about
-src/lib/                    # db.js (supabase-js build-time reader), ratings.js (USCCB legend)
-supabase/migrations/        # schema, indexes, RLS, run_read_only_sql, anon-grant hardening
-scripts/import_to_postgres.mjs   # one-time data load into Postgres (service-role key)
-scripts/export_sqlite.mjs        # regenerate public/movies_web.db + CSV FROM Postgres (prebuild)
-scripts/tmdb_match.py, apply_tmdb.py   # optional TMDB enrichment pipeline (Phase 6)
-export/films.json           # original exports for a separate site (not used by this build)
-data/movies.db              # original pre-FTS SQLite (not shipped)
-source-archive/             # raw .shtml provenance (a–z); git-ignored, not used by the site
+data/*.ndjson             CANONICAL data (movies, redirects, movie_tmdb, genres, …)
+src/pages/                index (browse), film/[slug], query, submit, about,
+                          browse-index.json.js (emits the client browse index)
+src/lib/db.js             build-time reader over data/
+src/lib/api.js            client-side Worker API helper
+worker/src/index.js       Worker: REST API, run_read_only_sql, /submit
+worker/src/postgrest.js   PostgREST query-string → SQLite translator
+worker/schema.sql         D1 schema (mirrors the old Postgres shape)
+scripts/build_d1_seed.mjs data/ → worker/seed.sql
+scripts/export_sqlite.mjs data/ → SQLite + CSV downloads (prebuild)
+scripts/dump_from_postgres.mjs  one-shot Supabase → data/ escape hatch (kept for provenance)
+scripts/tmdb_match.py     TMDB enrichment pipeline
+supabase/migrations/      historical schema record; nothing runs against it any more
+source-archive/           raw .shtml provenance (a–z); git-ignored, unused by the build
 ```
 
 ## Configuration
 
-Copy `.env.example` to `.env`. Keys:
+Copy `.env.example` to `.env`. Both values are public and safe to ship to the browser.
 
 | Var | Used by | Notes |
 |---|---|---|
-| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | build (`db.js`) | public anon values; read-only |
-| `PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY` | browser (browse + `/query`) | Astro inlines `PUBLIC_*` into the client bundle |
-| `PUBLIC_TURNSTILE_SITE_KEY` | browser (`/submit`) | Cloudflare Turnstile site key; defaults to Cloudflare's always-pass test key |
-| `SUPABASE_SERVICE_ROLE_KEY` | `scripts/import_to_postgres.mjs` only | **secret** — bypasses RLS; never commit, never ship to the client |
+| `PUBLIC_API_BASE` | browser (search, `/query`, `/submit`) | Worker base URL. Defaults to `http://127.0.0.1:8788` for local dev. In CI it comes from the repo **variable** of the same name. |
+| `PUBLIC_TURNSTILE_SITE_KEY` | browser (`/submit`) | Turnstile site key; defaults to Cloudflare's always-pass **test** key |
 
-In CI, the public values come from repo secrets `SUPABASE_URL` / `SUPABASE_ANON_KEY`
-(and optionally `TURNSTILE_SITE_KEY`); see `.github/workflows/deploy.yml`.
+There are no secrets in the site build. The only secret anywhere is the Worker's
+`TURNSTILE_SECRET`, set with `wrangler secret put`.
 
-### Public submissions (Phase 4)
+## Submissions & moderation
 
-`/submit` works out of the box with Cloudflare's **test** Turnstile keys (the widget
-always passes). To enable real bot protection in production:
+`/submit` lets anyone suggest a film or a correction. The form posts to the Worker's
+`POST /submit`, which verifies the Cloudflare Turnstile token **server-side** before
+inserting into `movie_submissions` with status `pending` — a browser-side check would be
+trivially bypassable. Nothing appears on the site automatically.
 
-1. Create a free **Cloudflare Turnstile** widget (dash.cloudflare.com → Turnstile),
-   adding your site's domain. You get a **site key** (public) and a **secret key**.
-2. Set the secret on the Edge Function:
-   `supabase secrets set TURNSTILE_SECRET=<secret-key>` (or Dashboard → Edge Functions →
-   `submit-movie` → Secrets).
-3. Publish the site key: set `PUBLIC_TURNSTILE_SITE_KEY` in `.env` and add a
-   `TURNSTILE_SITE_KEY` repo secret for CI.
+Turnstile currently uses Cloudflare's **test** keys, which always pass, so the captcha is
+decorative until you set real ones:
 
-The Worker's `POST /submit` is the only write path to `movie_submissions`. It verifies
-the Cloudflare Turnstile token **server-side** before inserting — a browser-side check
-would be trivially bypassable.
+```bash
+cd worker && npx wrangler secret put TURNSTILE_SECRET   # from dash.cloudflare.com → Turnstile
+# then set PUBLIC_TURNSTILE_SITE_KEY in .env and as a repo variable
+```
 
-### Moderation
-
-Review the queue with `wrangler` against D1; there is no admin UI. The former
-login-gated SPA at `/admin` was removed with the Supabase migration (D1 has no auth
-layer, and the queue had received zero submissions in its lifetime).
+Review the queue with `wrangler`; there is no admin UI (the login-gated `/admin` SPA was
+removed with the Supabase migration — D1 has no auth layer, and the queue had taken zero
+submissions in its lifetime):
 
 ```bash
 cd worker
@@ -120,89 +144,98 @@ npx wrangler d1 execute movie-archive --remote --yes \
                FROM movie_submissions WHERE status = 'pending' ORDER BY created_at;"
 ```
 
-Accepting a film means editing `data/movies.ndjson` and re-seeding D1 from it —
-`data/` is canonical, D1 is a derived serving copy. Full walkthrough in
+Full walkthrough, including how to promote a submission into the archive:
 [`docs/moderation.md`](docs/moderation.md).
 
-## Deploying to GitHub Pages
+## Deploying
 
-1. Push to `main`. `.github/workflows/deploy.yml` builds with Astro (Node 26) and
-   publishes on every push.
-2. In **Settings → Pages**, set **Source = GitHub Actions**.
-3. Add repo secrets `SUPABASE_URL` and `SUPABASE_ANON_KEY` (public anon values) under
-   **Settings → Secrets and variables → Actions**.
-4. The workflow sets `BASE_PATH=/<repo-name>/` automatically, so the project site works
-   at `https://<user>.github.io/<repo>/`. For a user/root site or custom domain at the
-   root, set `BASE_PATH` to `/`.
+**The site** — push to `main`. `.github/workflows/deploy.yml` builds with Astro (Node 26)
+and publishes to Pages on every push.
 
-All client asset/link URLs go through `import.meta.env.BASE_URL`, so the project-path
-deploy works. Locally, preview a project-path build with
-`BASE_PATH=/your-repo/ npm run build`.
+- **Settings → Pages → Source = GitHub Actions.**
+- Add repo **variable** `PUBLIC_API_BASE` (Settings → Secrets and variables → Actions →
+  Variables) pointing at the deployed Worker.
+- The workflow sets `BASE_PATH=/<repo-name>/` automatically, so the project site works at
+  `https://<user>.github.io/<repo>/`. For a root/custom domain, set `BASE_PATH=/`.
+  All asset and link URLs go through `import.meta.env.BASE_URL`; preview a project-path
+  build locally with `BASE_PATH=/your-repo/ npm run build`.
 
-## Status & phases
+**The API** — from `worker/`:
 
-Postgres is canonical; the public pages stay fast/static where possible and go live
-only for genuinely dynamic features. The 8-phase plan
-(`~/.claude/plans/quirky-jumping-phoenix.md`):
+```bash
+npx wrangler deploy                                              # code only
+node ../scripts/build_d1_seed.mjs                                # after a data/ change
+npx wrangler d1 execute movie-archive --remote --yes --file=seed.sql
+```
+
+Re-seeding drops and recreates the content tables (which also rebuilds the FTS index).
+`movie_submissions` is created with `IF NOT EXISTS` and is **not** dropped, so the
+queue survives.
+
+## Public API
+
+Read-only JSON, no signup, no key, CORS open. The curated `public_movies_api` resource
+gives one row per film with TMDB fields and a `genres[]` array:
+
+```bash
+BASE="https://movie-archive-api.viacrusis14.workers.dev/rest/v1"
+curl "$BASE/public_movies_api?select=title,year,usccb_code,genres&usccb_code=eq.O&year=gte.2000&limit=5"
+```
+
+It speaks a subset of the [PostgREST](https://postgrest.org/) dialect — `select`, the
+usual comparison/`in`/`is`/`ilike`/`cs` operators, `order` with nulls handling,
+`limit`/`offset`, `Range`, and `Prefer: count=exact` → `content-range`. Full-text search
+is `?search_tsv=wfts(english).vampire` on the `movies` resource.
+
+Known gaps versus real PostgREST (embedded resources, `not.`/`or=`/`and=`) are listed in
+**[`docs/api.md`](docs/api.md)**. Prefer the bulk `/downloads/` artifacts over crawling.
+
+## TMDB enrichment
+
+The enrichment **has already been run** (~12.3k films with posters, 19 genres). To
+refresh it:
+
+```bash
+export TMDB_API_KEY="..."
+python3 scripts/tmdb_match.py --input export/films.json --out tmdb_matches.csv
+node scripts/apply_tmdb.mjs        # NOTE: written against Postgres; needs porting to data/
+```
+
+`TMDB_API_KEY` is script-time only and never ships to the client.
+
+> ⚠️ `apply_tmdb.mjs` still writes to Supabase and has **not** been ported to the
+> `data/*.ndjson` + D1 pipeline. Re-running enrichment needs that work first.
+
+## History
+
+Built as a static SQLite-in-browser site, migrated to Supabase over 8 phases during June
+2026, then migrated off Supabase in August 2026 for the pausing reasons above. The
+original plan lives at `~/.claude/plans/quirky-jumping-phoenix.md`.
 
 | Phase | What | Status |
 |---|---|---|
-| 1 | Stabilize the static baseline (rollback point) | ✅ done |
-| 2 | Supabase schema + import 13,693 rows; swap the build to read Postgres | ✅ done |
-| 3 | Regenerate the SQLite + CSV exports **from** Postgres in `prebuild` | ✅ done |
-| — | Rework: **live** Supabase browse + **server-side** `/query` SQL editor; tighten anon grants (replaced the planned static `films-index.json` browse and the sql.js-httpvfs snapshot) | ✅ done |
-| 4 | Public `/submit` form → Turnstile-verified Edge Function → moderation via Supabase Studio | ✅ done |
-| 5 | Filtering, sorting, shareable URL state, A–Z navigation, clickable rating chips | ✅ done |
-| 6 | TMDB enrichment into Postgres (posters + metadata) | ✅ done (~12.4k films enriched) |
-| — | Schema refactor: 1:1 `movie_tmdb` table + `redirects` table (drop `movies.is_redirect`) | ✅ done |
-| 7 | Public read-only API (PostgREST over `public_movies_api`); see [`docs/api.md`](docs/api.md) | ✅ done |
-| 8 | Custom moderator admin SPA at `/admin` (login, review queue, import to movies) | ⛔ removed in phase 9 |
-| 9 | **Migrate off Supabase** → committed `data/*.ndjson` + Cloudflare Worker/D1; API contract preserved; `/admin` retired for CLI moderation | ✅ done |
+| 1–3 | Stabilize baseline; Supabase schema + import; regenerate SQLite/CSV from Postgres | ✅ |
+| — | Rework: live Supabase browse + server-side `/query` (replaced the planned static browse and sql.js snapshot) | ✅ |
+| 4 | Public `/submit` → Turnstile-verified Edge Function | ✅ |
+| 5 | Filtering, sorting, shareable URL state, A–Z bar, rating chips | ✅ |
+| 6 | TMDB enrichment (posters + genres) | ✅ ~12.3k films |
+| — | Schema refactor: 1:1 `movie_tmdb`, separate `redirects` table | ✅ |
+| 7 | Public read-only API | ✅ |
+| 8 | Moderator admin SPA at `/admin` | ⛔ removed in 9 |
+| 9 | **Migrate off Supabase** → committed NDJSON + Cloudflare Worker/D1 | ✅ |
 
-The live browse/query rework departed from the plan: a GitHub Pages quirk (it gzips
-files and serves *compressed* byte ranges) made the in-browser SQLite range-request
-DB unusable, so browse and `/query` queried Supabase directly instead.
+One thread worth knowing: the original static browse was abandoned because GitHub Pages
+gzips files and serves *compressed* byte ranges, which broke sql.js-httpvfs range
+requests. Phase 9 made browse static again — but with a prebuilt JSON index the browser
+loads whole, rather than range requests into a SQLite file, sidestepping that bug
+entirely.
 
-Phase 9 undid part of that. Browse is static again — but via a prebuilt
-`/browse-index.json` (884 KB, ~257 KB gzipped) that the browser filters, sorts and
-pages itself, rather than range requests into a SQLite file. That sidesteps the
-Pages gzip quirk entirely and leaves the homepage with no backend dependency at
-all. Only full-text search calls the Worker, because ranked search over the review
-text needs FTS5.
+Not built: **featured films / movie-of-the-day** (manual daily/weekly picks plus an
+automatic A-I/A-II pick); sketch is in the plan file.
 
-## TMDB enrichment (Phase 6)
+---
 
-The detail page renders a poster, genre chips, and a TMDB link for any film with a
-`movie_tmdb` row. The enrichment **has been run** (~12.4k films matched). To re-run or
-refresh it (e.g. with `--include-low`), two steps:
-
-```bash
-# 1. Match every film to a TMDB id (needs a free TMDB v3 key/v4 token + `pip install requests`).
-#    Resumable — re-run to resume; writes tmdb_matches.csv with poster_path/overview/genre_ids.
-export TMDB_API_KEY="..."
-python3 scripts/tmdb_match.py --input export/films.json --out tmdb_matches.csv
-
-# 2. Fold the matches into Postgres (movie_tmdb + genres + movie_genres). Service-role key only;
-#    no TMDB key needed. Idempotent. Add --include-low to also apply weak matches.
-node --env-file=.env scripts/apply_tmdb.mjs
-```
-
-After step 2, the next `npm run build` (or a CI redeploy) renders posters/genres. The
-`TMDB_API_KEY` stays script-time only — never shipped to the client. (`scripts/apply_tmdb.py`
-is the older variant that writes the legacy SQLite/exports for the separate export site.)
-
-## Public API (Phase 7)
-
-The data is also a read-only JSON API via Supabase PostgREST — the same backend the
-browse page uses. The curated `public_movies_api` view (one row per real film, with
-TMDB fields + a `genres[]` array, safe columns only) is granted `SELECT` to `anon`;
-writes are rejected. Full reference, including filtering, sorting, paging, and
-full-text search (`search_tsv` `wfts`), is in **[`docs/api.md`](docs/api.md)**. No
-signup or per-user key — requests carry the public anon key. Quick taste:
-
-```bash
-KEY="sb_publishable_MnMcji0ZPqJZPTn911Sg1A_KCzvBVO3"
-BASE="https://vjtavurzjxfjczpvtpdq.supabase.co/rest/v1"
-curl "$BASE/public_movies_api?select=title,year,usccb_code,genres&usccb_code=eq.O&year=gte.2000&limit=5" \
-  -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
-```
+Review text © its original publishers (USCCB / Catholic News Service). This archive is
+unaffiliated with the USCCB. Poster and genre metadata from
+[TMDB](https://www.themoviedb.org/); this product uses the TMDB API but is not endorsed
+or certified by TMDB.
